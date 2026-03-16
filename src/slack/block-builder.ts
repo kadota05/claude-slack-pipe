@@ -127,7 +127,7 @@ export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
     // 1. Status indicator (serves as header)
     {
       type: 'section',
-      text: { type: 'mrkdwn', text: `${statusEmoji} *Claude Code — ${statusText}*` },
+      text: { type: 'mrkdwn', text: `${statusEmoji} *${statusText}*` },
     },
     // 2. Model selector
     {
@@ -175,7 +175,7 @@ export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
     },
   ];
 
-  // 7. Recent session entries
+  // 6. Recent session entries
   if (recentSessions.length === 0) {
     blocks.push({
       type: 'context',
@@ -183,15 +183,21 @@ export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
     });
   } else {
     for (const s of recentSessions) {
-      blocks.push({
-        type: 'context',
-        elements: [
-          {
+      blocks.push(
+        {
+          type: 'section',
+          text: {
             type: 'mrkdwn',
-            text: `${s.timeAgo} — ${s.firstPromptPreview}\n${s.projectPath}`,
+            text: `*${s.firstPromptPreview}*`,
           },
-        ],
-      });
+        },
+        {
+          type: 'context',
+          elements: [
+            { type: 'mrkdwn', text: `:clock1: ${s.timeAgo}  |  :file_folder: ${s.projectPath}` },
+          ],
+        },
+      );
     }
   }
 
