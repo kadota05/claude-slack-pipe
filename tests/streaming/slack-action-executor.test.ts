@@ -97,4 +97,28 @@ describe('SlackActionExecutor', () => {
     expect(result.ok).toBe(false);
     expect(result.retryAfterMs).toBeGreaterThan(0);
   });
+
+  it('skips low priority actions when rate limit is high', async () => {
+    // Fill up rate limit to trigger degradation
+    for (let i = 0; i < 19; i++) {
+      executor.rateLimiter.record('postMessage');
+    }
+    // 19/20 = 95% → EMERGENCY → only P1 allowed
+
+    const action = makeAction({ priority: 3 });
+    const result = await executor.execute(action);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('degraded_skip');
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('allows P1 actions even at high rate limit', async () => {
+    for (let i = 0; i < 19; i++) {
+      executor.rateLimiter.record('postMessage');
+    }
+
+    const action = makeAction({ priority: 1 });
+    const result = await executor.execute(action);
+    expect(result.ok).toBe(true);
+  });
 });

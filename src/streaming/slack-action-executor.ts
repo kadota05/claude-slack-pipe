@@ -1,6 +1,7 @@
 // src/streaming/slack-action-executor.ts
 import { logger } from '../utils/logger.js';
 import { RateLimitTracker } from './rate-limit-tracker.js';
+import { GracefulDegradation } from './graceful-degradation.js';
 import type { SlackAction, SlackApiMethod, ExecutorResult } from './types.js';
 
 const ACTION_TO_METHOD: Record<SlackAction['type'], SlackApiMethod> = {
@@ -17,6 +18,13 @@ export class SlackActionExecutor {
 
   async execute(action: SlackAction): Promise<ExecutorResult> {
     const method = ACTION_TO_METHOD[action.type];
+
+    // Graceful Degradation check
+    const level = GracefulDegradation.getLevel(this.rateLimiter.getMaxUtilization());
+    if (!GracefulDegradation.shouldExecute(level, action.priority)) {
+      logger.debug(`Degradation ${level}: skipping P${action.priority} ${action.type}`);
+      return { ok: false, error: 'degraded_skip' };
+    }
 
     if (!this.rateLimiter.canProceed(method)) {
       logger.warn(`Rate limit would be exceeded for ${method}, skipping`);
