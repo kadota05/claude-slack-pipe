@@ -1,69 +1,46 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { HomeTabHandler } from '../../src/slack/home-tab.js';
 
-describe('HomeTabHandler', () => {
-  it('should build home tab view with projects and sessions', () => {
-    const mockProjectStore = {
+describe('HomeTabHandler (phase2)', () => {
+  let handler: HomeTabHandler;
+  let mockClient: any;
+  let mockUserPrefStore: any;
+  let mockSessionIndexStore: any;
+  let mockProjectStore: any;
+
+  beforeEach(() => {
+    mockClient = { views: { publish: vi.fn().mockResolvedValue({ ok: true }) } };
+    mockUserPrefStore = {
+      get: vi.fn().mockReturnValue({ defaultModel: 'sonnet', activeDirectoryId: null }),
+    };
+    mockSessionIndexStore = {
+      getActive: vi.fn().mockReturnValue([]),
+      getEnded: vi.fn().mockReturnValue([]),
+      listByDirectory: vi.fn().mockReturnValue([]),
+    };
+    mockProjectStore = {
       getProjects: vi.fn().mockReturnValue([
-        { id: '-Users-user-dev-webapp', projectPath: '/Users/user/dev/webapp', sessionCount: 3, lastModified: new Date() },
+        { name: 'myapp', path: '/home/user/myapp' },
       ]),
     };
-
-    const mockSessionStore = {
-      getActiveSessions: vi.fn().mockReturnValue([
-        {
-          sessionId: 'abc-123',
-          name: 'webapp: auth',
-          lastActiveAt: new Date(),
-          threadTs: '1.000',
-          dmChannelId: 'D123',
-        },
-      ]),
-    };
-
-    const handler = new HomeTabHandler(
-      mockProjectStore as any,
-      mockSessionStore as any,
-    );
-
-    const blocks = handler.buildHomeView();
-
-    expect(blocks.length).toBeGreaterThan(0);
-
-    // Should have header
-    const header = blocks.find((b: any) => b.type === 'header');
-    expect(header).toBeDefined();
-
-    // Should have project
-    const projectBlock = blocks.find((b: any) =>
-      b.text?.text?.includes('webapp'),
-    );
-    expect(projectBlock).toBeDefined();
-
-    // Should have active session
-    const sessionBlock = blocks.find((b: any) =>
-      b.text?.text?.includes('webapp: auth'),
-    );
-    expect(sessionBlock).toBeDefined();
+    handler = new HomeTabHandler(mockClient, mockUserPrefStore, mockSessionIndexStore, mockProjectStore);
   });
 
-  it('should show empty state when no projects', () => {
-    const mockProjectStore = {
-      getProjects: vi.fn().mockReturnValue([]),
-    };
-    const mockSessionStore = {
-      getActiveSessions: vi.fn().mockReturnValue([]),
-    };
+  it('publishes home tab with correct user preferences', async () => {
+    await handler.publishHomeTab('U001');
+    expect(mockClient.views.publish).toHaveBeenCalledOnce();
+    expect(mockUserPrefStore.get).toHaveBeenCalledWith('U001');
+  });
 
-    const handler = new HomeTabHandler(
-      mockProjectStore as any,
-      mockSessionStore as any,
-    );
+  it('filters sessions by active directory when set', async () => {
+    mockUserPrefStore.get.mockReturnValue({ defaultModel: 'sonnet', activeDirectoryId: 'myapp' });
+    await handler.publishHomeTab('U001');
+    expect(mockSessionIndexStore.listByDirectory).toHaveBeenCalled();
+  });
 
-    const blocks = handler.buildHomeView();
-    const emptyBlock = blocks.find((b: any) =>
-      b.text?.text?.includes('No projects'),
-    );
-    expect(emptyBlock).toBeDefined();
+  it('uses getActive/getEnded when no directory selected', async () => {
+    await handler.publishHomeTab('U001');
+    expect(mockSessionIndexStore.getActive).toHaveBeenCalled();
+    expect(mockSessionIndexStore.getEnded).toHaveBeenCalled();
   });
 });

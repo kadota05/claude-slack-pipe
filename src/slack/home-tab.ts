@@ -1,52 +1,58 @@
-import type { ProjectStore } from '../store/project-store.js';
-import type { SessionStore } from '../store/session-store.js';
-import { buildHomeTabBlocks } from './block-builder.js';
+import { buildHomeTabBlocksV2 } from './block-builder.js';
 import { logger } from '../utils/logger.js';
-
-type Block = Record<string, any>;
 
 export class HomeTabHandler {
   constructor(
-    private readonly projectStore: ProjectStore,
-    private readonly sessionStore: SessionStore,
+    private readonly client: any,
+    private readonly userPrefStore: any,
+    private readonly sessionIndexStore: any,
+    private readonly projectStore: any,
   ) {}
 
-  buildHomeView(): Block[] {
+  async publishHomeTab(userId: string, page = 0): Promise<void> {
+    const prefs = this.userPrefStore.get(userId);
     const projects = this.projectStore.getProjects();
-    const activeSessions = this.sessionStore.getActiveSessions();
+    const directories = projects.map((p: any) => ({
+      id: p.name,
+      name: p.name,
+      path: p.path,
+    }));
 
-    return buildHomeTabBlocks(
-      projects.map((p) => ({
-        id: p.id,
-        projectPath: p.projectPath,
-        sessionCount: p.sessionCount,
-      })),
-      activeSessions.map((s) => ({
-        name: s.name,
-        sessionId: s.sessionId,
-        lastActiveAt: s.lastActiveAt,
-        threadTs: s.threadTs,
-        dmChannelId: s.dmChannelId,
-      })),
-    );
-  }
+    let activeSessions: any[];
+    let endedSessions: any[];
 
-  async publishHomeTab(
-    client: { views: { publish: (args: any) => Promise<any> } },
-    userId: string,
-  ): Promise<void> {
+    if (prefs.activeDirectoryId) {
+      const all = this.sessionIndexStore.listByDirectory(
+        projects.find((p: any) => p.name === prefs.activeDirectoryId)?.path || ''
+      );
+      activeSessions = all.filter((s: any) => s.status === 'active');
+      endedSessions = all.filter((s: any) => s.status === 'ended');
+    } else {
+      activeSessions = this.sessionIndexStore.getActive();
+      endedSessions = this.sessionIndexStore.getEnded();
+    }
+
+    const sessionsPerPage = 20;
+    const totalSessions = activeSessions.length + endedSessions.length;
+    const totalPages = Math.max(1, Math.ceil(totalSessions / sessionsPerPage));
+
+    const blocks = buildHomeTabBlocksV2({
+      model: prefs.defaultModel,
+      directoryId: prefs.activeDirectoryId,
+      directories,
+      activeSessions,
+      endedSessions,
+      page,
+      totalPages,
+    });
+
     try {
-      const blocks = this.buildHomeView();
-      await client.views.publish({
+      await this.client.views.publish({
         user_id: userId,
-        view: {
-          type: 'home',
-          blocks,
-        },
+        view: { type: 'home', blocks },
       });
-      logger.debug('Home tab published', { userId });
     } catch (err) {
-      logger.error('Failed to publish home tab', { userId, error: err });
+      logger.error('Failed to publish home tab', { error: (err as Error).message });
     }
   }
 }
