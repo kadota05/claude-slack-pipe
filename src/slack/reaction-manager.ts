@@ -2,6 +2,8 @@
 import { logger } from '../utils/logger.js';
 
 export class ReactionManager {
+  private lastDone: { channel: string; ts: string } | null = null;
+
   constructor(private readonly client: any) {}
 
   async addSpawning(channel: string, timestamp: string): Promise<void> {
@@ -9,6 +11,10 @@ export class ReactionManager {
   }
 
   async replaceWithProcessing(channel: string, timestamp: string): Promise<void> {
+    if (this.lastDone !== null) {
+      await this.safeRemove(this.lastDone.channel, this.lastDone.ts, 'white_check_mark');
+      this.lastDone = null;
+    }
     await this.safeRemove(channel, timestamp, 'hourglass_flowing_sand');
     await this.safeAdd(channel, timestamp, 'brain');
   }
@@ -16,9 +22,7 @@ export class ReactionManager {
   async replaceWithDone(channel: string, timestamp: string): Promise<void> {
     await this.safeRemove(channel, timestamp, 'brain');
     await this.safeAdd(channel, timestamp, 'white_check_mark');
-    setTimeout(async () => {
-      await this.safeRemove(channel, timestamp, 'white_check_mark');
-    }, 3000);
+    this.lastDone = { channel, ts: timestamp };
   }
 
   async addQueued(channel: string, timestamp: string): Promise<void> {

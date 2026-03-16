@@ -56,13 +56,35 @@ describe('ReactionManager (phase2)', () => {
       });
     });
 
-    it('auto-removes check mark after 3 seconds', async () => {
+    it('does NOT auto-remove check mark after 3 seconds', async () => {
       await rm.replaceWithDone('C001', '123');
-      vi.advanceTimersByTime(3000);
-      // wait for promise
+      client.reactions.remove.mockClear();
+      vi.advanceTimersByTime(5000);
       await vi.runAllTimersAsync();
-      expect(client.reactions.remove).toHaveBeenCalledWith({
+      expect(client.reactions.remove).not.toHaveBeenCalledWith({
         channel: 'C001', timestamp: '123', name: 'white_check_mark',
+      });
+    });
+  });
+
+  describe('replaceWithProcessing clears previous checkmark', () => {
+    it('removes previous checkmark when starting new processing', async () => {
+      await rm.replaceWithDone('C001', '100');
+      client.reactions.remove.mockClear();
+      client.reactions.add.mockClear();
+      await rm.replaceWithProcessing('C001', '200');
+      expect(client.reactions.remove).toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '100', name: 'white_check_mark',
+      });
+      expect(client.reactions.add).toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '200', name: 'brain',
+      });
+    });
+
+    it('works when there is no previous checkmark', async () => {
+      await rm.replaceWithProcessing('C001', '200');
+      expect(client.reactions.add).toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '200', name: 'brain',
       });
     });
   });
