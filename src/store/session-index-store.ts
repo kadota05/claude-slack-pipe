@@ -31,6 +31,10 @@ export class SessionIndexStore {
     return id ? this.data.sessions[id] : undefined;
   }
 
+  findBySessionId(sessionId: string): SessionIndexEntry | undefined {
+    return this.data.sessions[sessionId];
+  }
+
   update(cliSessionId: string, fields: Partial<Pick<SessionIndexEntry, 'status' | 'name' | 'model' | 'lastActiveAt'>>): void {
     const entry = this.data.sessions[cliSessionId];
     if (!entry) return;

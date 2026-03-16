@@ -21,9 +21,10 @@ import type { PersistentSession } from './bridge/persistent-session.js';
 import { acquirePidLock } from './utils/pid-lock.js';
 import { StreamProcessor } from './streaming/stream-processor.js';
 import { SlackActionExecutor } from './streaming/slack-action-executor.js';
-import { ToolResultCache } from './streaming/tool-result-cache.js';
-import { buildToolModal, buildThinkingModal, buildToolGroupModal, buildSubagentModal } from './slack/modal-builder.js';
+import { buildToolModal, buildSubagentModal, buildBundleDetailModal } from './slack/modal-builder.js';
+import type { BundleAction } from './streaming/types.js';
 import { SerialActionQueue } from './streaming/serial-action-queue.js';
+import { SessionJsonlReader } from './streaming/session-jsonl-reader.js';
 import { SubagentJsonlReader } from './streaming/subagent-jsonl-reader.js';
 
 function waitForIdle(session: PersistentSession, timeoutMs = 300000): Promise<void> {
@@ -57,9 +58,6 @@ async function main(): Promise<void> {
   const projectStore = new ProjectStore(config.claudeProjectsDir);
   const userPrefStore = new UserPreferenceStore(config.dataDir);
   const sessionIndexStore = new SessionIndexStore(config.dataDir);
-
-  // Initialize tool result cache (30min TTL, 50MB max)
-  const toolResultCache = new ToolResultCache({ ttlMs: 30 * 60 * 1000, maxSizeBytes: 50 * 1024 * 1024 });
 
   // Initialize process coordination
   const coordinator = new SessionCoordinator({
@@ -343,27 +341,31 @@ async function main(): Promise<void> {
     wiredSessions.add(session.sessionId);
 
     const executor = new SlackActionExecutor(client);
-    const streamProcessor = new StreamProcessor({ channel: channelId, threadTs });
+    const streamProcessor = new StreamProcessor({
+      channel: channelId,
+      threadTs,
+      sessionId: session.sessionId,
+    });
     const serialQueue = new SerialActionQueue();
 
     serialQueue.onError((err) => {
       logger.error('SerialActionQueue error', { error: err.message });
     });
 
-    // Convert GroupAction to SlackAction for the executor
-    function convertGroupActionToSlackAction(ga: any): any {
-      const priority = ga.type === 'update' ? 4 : 3;
+    // Convert BundleAction to SlackAction for the executor
+    function convertBundleActionToSlackAction(ba: BundleAction): any {
+      const priority = ba.type === 'update' ? 4 : 3;
       return {
-        type: ga.type === 'postMessage' ? 'postMessage' : 'update',
+        type: ba.type === 'postMessage' ? 'postMessage' : 'update',
         priority,
         channel: channelId,
         threadTs,
-        messageTs: ga.messageTs,
-        blocks: ga.blocks,
-        text: ga.text || '',
+        messageTs: (ba as any).messageTs,
+        blocks: ba.blocks,
+        text: ba.text || '',
         metadata: {
-          messageType: ga.category || 'tool_use',
-          groupId: ga.groupId,
+          messageType: 'tool_use',
+          bundleId: ba.bundleId,
         },
       };
     }
@@ -372,75 +374,18 @@ async function main(): Promise<void> {
       serialQueue.enqueue(async () => {
         try {
           // 1. Process event synchronously — returns actions
-          const { groupActions, textAction, resultEvent } = streamProcessor.processEvent(event);
+          const { bundleActions, textAction, resultEvent } = streamProcessor.processEvent(event);
 
-          // 2. Execute group actions sequentially
-          for (const ga of groupActions) {
-            const slackAction = convertGroupActionToSlackAction(ga);
+          // 2. Execute bundle actions sequentially
+          for (const ba of bundleActions) {
+            const slackAction = convertBundleActionToSlackAction(ba);
             const result = await executor.execute(slackAction);
-            if (result.ok && result.ts && ga.type === 'postMessage') {
-              streamProcessor.registerGroupMessageTs(ga.groupId, result.ts);
+            if (result.ok && result.ts && ba.type === 'postMessage') {
+              streamProcessor.registerBundleMessageTs(ba.bundleId, result.ts);
             }
           }
 
-          // 3. Cache group data for modals on collapse
-          for (const ga of groupActions) {
-            if (ga.type === 'collapse') {
-              const groupData = streamProcessor.getGroupData(ga.groupId);
-              if (groupData) {
-                const entry = indexStore.findByThreadTs(threadTs);
-                toolResultCache.setGroupData(ga.groupId, {
-                  category: groupData.category,
-                  thinkingTexts: groupData.thinkingTexts,
-                  tools: groupData.tools.map(t => ({
-                    toolUseId: t.toolUseId,
-                    toolName: t.toolName,
-                    input: t.input,
-                    oneLiner: t.oneLiner,
-                    durationMs: t.durationMs,
-                    isError: t.isError,
-                  })),
-                  agentDescription: groupData.agentDescription,
-                  agentId: groupData.agentId,
-                  sessionId: entry?.cliSessionId,
-                  projectPath: entry?.projectPath,
-                });
-              }
-            }
-          }
-
-          // 4. Cache individual tool results for modal display
-          if (event.type === 'user' && event.message?.content) {
-            for (const block of event.message.content) {
-              if (block.type === 'tool_result' && block.tool_use_id) {
-                const resultText = typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
-                // Find tool info from GroupTracker's groups
-                let toolName = '';
-                let toolInput: Record<string, unknown> = {};
-                let toolDuration = 0;
-                for (const ga of groupActions) {
-                  const gd = streamProcessor.getGroupData(ga.groupId);
-                  const toolInfo = gd?.tools?.find(t => t.toolUseId === block.tool_use_id);
-                  if (toolInfo) {
-                    toolName = toolInfo.toolName;
-                    toolInput = toolInfo.input;
-                    toolDuration = toolInfo.durationMs || 0;
-                    break;
-                  }
-                }
-                toolResultCache.set(block.tool_use_id, {
-                  toolId: block.tool_use_id,
-                  toolName,
-                  input: toolInput,
-                  result: resultText,
-                  durationMs: toolDuration,
-                  isError: block.is_error === true,
-                });
-              }
-            }
-          }
-
-          // 5. Execute text action
+          // 3. Execute text action
           if (textAction) {
             const result = await executor.execute(textAction);
             if (result.ok && result.ts && textAction.type === 'postMessage') {
@@ -607,72 +552,143 @@ async function main(): Promise<void> {
   });
 
   // --- Tool Detail Modal Action ---
+  const sessionJsonlReader = new SessionJsonlReader(config.claudeProjectsDir);
 
   app.action(/^view_tool_detail:/, async ({ ack, body }: any) => {
     await ack();
     const actionId = body.actions?.[0]?.action_id || '';
-    const toolUseId = actionId.split(':')[1];
+    const parts = actionId.split(':');
+    let sessionId: string | undefined;
+    let toolUseId: string;
+    if (parts.length >= 3) {
+      sessionId = parts[1];
+      toolUseId = parts[2];
+    } else {
+      toolUseId = parts[1];
+    }
     if (!toolUseId) return;
 
-    const cached = toolResultCache.get(toolUseId);
-    if (!cached) {
-      logger.warn(`No cached data for tool ${toolUseId}`);
+    const isFromModal = !!body.view;
+
+    let entry: any = null;
+    if (sessionId) {
+      entry = sessionIndexStore.findBySessionId(sessionId);
+    }
+    if (!entry) {
+      const threadTs = body.message?.thread_ts || body.message?.ts
+        || body.view?.private_metadata || '';
+      entry = threadTs ? sessionIndexStore.findByThreadTs(threadTs) : null;
+    }
+
+    let modal: any = null;
+    if (entry) {
+      const detail = await sessionJsonlReader.readToolDetail(
+        entry.projectPath,
+        entry.cliSessionId,
+        toolUseId,
+      );
+      if (detail) {
+        modal = buildToolModal({
+          toolId: detail.toolUseId,
+          toolName: detail.toolName,
+          input: detail.input,
+          result: detail.result,
+          durationMs: 0,
+          isError: detail.isError,
+        });
+      }
+    }
+
+    if (!modal) {
+      logger.warn(`No data found for tool ${toolUseId}`);
       return;
     }
 
-    const modal = buildToolModal(cached);
+    if (isFromModal) {
+      await app.client.views.push({ trigger_id: body.trigger_id, view: modal });
+    } else {
+      await app.client.views.open({ trigger_id: body.trigger_id, view: modal });
+    }
+  });
+
+  // --- Bundle Detail Modal Action ---
+  const subagentReader = new SubagentJsonlReader(config.claudeProjectsDir);
+
+  app.action(/^view_bundle:/, async ({ ack, body }: any) => {
+    await ack();
+    const actionId = body.actions?.[0]?.action_id || '';
+    const parts = actionId.split(':');
+    const sessionId = parts[1];
+    const bundleIndex = parseInt(parts[2], 10);
+    if (!sessionId || isNaN(bundleIndex)) return;
+
+    const entry = sessionIndexStore.findBySessionId(sessionId);
+    if (!entry) {
+      logger.warn(`No session found for ${sessionId}`);
+      return;
+    }
+
+    const entries = await sessionJsonlReader.readBundle(
+      entry.projectPath,
+      sessionId,
+      bundleIndex,
+    );
+
+    if (entries.length === 0) {
+      logger.warn(`No bundle entries for ${sessionId}:${bundleIndex}`);
+      return;
+    }
+
+    const modal = buildBundleDetailModal(entries, sessionId);
+    const threadTs = body.message?.thread_ts || body.message?.ts || '';
+    modal.private_metadata = threadTs;
+
     await app.client.views.open({
       trigger_id: body.trigger_id,
       view: modal,
     });
   });
 
-  // --- Group Detail Modal Action ---
-  const subagentReader = new SubagentJsonlReader(config.claudeProjectsDir);
-
-  app.action(/^view_group_detail:/, async ({ ack, body }: any) => {
+  // --- SubAgent Detail Modal Action ---
+  app.action(/^view_subagent_detail:/, async ({ ack, body }: any) => {
     await ack();
     const actionId = body.actions?.[0]?.action_id || '';
-    const groupId = actionId.split(':')[1];
-    if (!groupId) return;
+    const parts = actionId.split(':');
+    const sessionId = parts[1];
+    const toolUseId = parts[2];
+    if (!sessionId || !toolUseId) return;
 
-    const groupData = toolResultCache.getGroupData(groupId);
-    if (!groupData) {
-      logger.warn(`No cached group data for ${groupId}`);
-      return;
+    const entry = sessionIndexStore.findBySessionId(sessionId);
+    if (!entry) return;
+
+    const agentResult = await sessionJsonlReader.readToolDetail(
+      entry.projectPath,
+      entry.cliSessionId,
+      toolUseId,
+    );
+
+    let agentId: string | null = null;
+    if (agentResult) {
+      const match = agentResult.result.match(/agentId:\s*([\w]+)/);
+      if (match) agentId = match[1];
     }
 
-    let modal: any;
-
-    if (groupData.category === 'thinking') {
-      modal = buildThinkingModal(groupData.thinkingTexts || []);
-    } else if (groupData.category === 'tool') {
-      modal = buildToolGroupModal(
-        (groupData.tools || []).map(t => ({
-          toolUseId: t.toolUseId,
-          toolName: t.toolName,
-          oneLiner: t.oneLiner,
-          durationMs: t.durationMs || 0,
-          isError: t.isError || false,
-        })),
-      );
-    } else if (groupData.category === 'subagent') {
-      let flow = null;
-      if (groupData.agentId && groupData.sessionId && groupData.projectPath) {
-        flow = await subagentReader.read(
-          groupData.projectPath,
-          groupData.sessionId,
-          groupData.agentId,
-        );
-      }
-      modal = buildSubagentModal(groupData.agentDescription || 'SubAgent', flow);
+    let flow = null;
+    if (agentId) {
+      flow = await subagentReader.read(entry.projectPath, entry.cliSessionId, agentId);
     }
 
-    if (modal) {
-      await app.client.views.open({
-        trigger_id: body.trigger_id,
-        view: modal,
-      });
+    const description = agentResult?.input?.description as string || 'SubAgent';
+    const modal = buildSubagentModal(description, flow);
+    const threadTs = body.message?.thread_ts || body.message?.ts
+      || body.view?.private_metadata || '';
+    modal.private_metadata = threadTs;
+
+    const isFromModal = !!body.view;
+    if (isFromModal) {
+      await app.client.views.push({ trigger_id: body.trigger_id, view: modal });
+    } else {
+      await app.client.views.open({ trigger_id: body.trigger_id, view: modal });
     }
   });
 
@@ -697,6 +713,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  logger.error('Fatal error', { error: err });
+  logger.error('Fatal error', { error: err?.message || err });
   process.exit(1);
 });
