@@ -21,7 +21,7 @@ import type { PersistentSession } from './bridge/persistent-session.js';
 import { acquirePidLock } from './utils/pid-lock.js';
 import { StreamProcessor } from './streaming/stream-processor.js';
 import { SlackActionExecutor } from './streaming/slack-action-executor.js';
-import { buildToolModal, buildSubagentModal, buildBundleDetailModal } from './slack/modal-builder.js';
+import { buildToolModal, buildThinkingModal, buildSubagentModal, buildBundleDetailModal } from './slack/modal-builder.js';
 import type { BundleAction } from './streaming/types.js';
 import { SerialActionQueue } from './streaming/serial-action-queue.js';
 import { SessionJsonlReader } from './streaming/session-jsonl-reader.js';
@@ -642,7 +642,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    const modal = buildBundleDetailModal(entries, sessionId);
+    const modal = buildBundleDetailModal(entries, sessionId, bundleIndex);
     const threadTs = body.message?.thread_ts || body.message?.ts || '';
     modal.private_metadata = threadTs;
 
@@ -650,6 +650,37 @@ async function main(): Promise<void> {
       trigger_id: body.trigger_id,
       view: modal,
     });
+  });
+
+  // --- Thinking Detail Modal Action ---
+  app.action(/^view_thinking_detail:/, async ({ ack, body }: any) => {
+    await ack();
+    const actionId = body.actions?.[0]?.action_id || '';
+    const parts = actionId.split(':');
+    const sessionId = parts[1];
+    const bundleIndex = parseInt(parts[2], 10);
+    const thinkingIndex = parseInt(parts[3], 10);
+    if (!sessionId || isNaN(bundleIndex) || isNaN(thinkingIndex)) return;
+
+    const entry = sessionIndexStore.findBySessionId(sessionId);
+    if (!entry) return;
+
+    const bundleEntries = await sessionJsonlReader.readBundle(
+      entry.projectPath,
+      sessionId,
+      bundleIndex,
+    );
+
+    // Filter thinking entries and pick by index
+    const thinkingEntries = bundleEntries.filter(e => e.type === 'thinking');
+    const target = thinkingEntries[thinkingIndex];
+    if (!target || target.type !== 'thinking') return;
+
+    const modal = buildThinkingModal(target.texts);
+    const threadTs = body.view?.private_metadata || '';
+    modal.private_metadata = threadTs;
+
+    await app.client.views.push({ trigger_id: body.trigger_id, view: modal });
   });
 
   // --- SubAgent Detail Modal Action ---
