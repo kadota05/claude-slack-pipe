@@ -16,34 +16,39 @@ describe('buildClaudeArgs', () => {
     expect(args).toContain('-p');
     expect(args).toContain('--output-format');
     expect(args).toContain('json');
+    expect(args).toContain('--permission-mode');
+    expect(args).toContain('bypassPermissions');
     expect(args).toContain('--model');
-    expect(args).toContain('claude-sonnet-4-20250514');
-    expect(args).not.toContain('--resume');
+    expect(args).toContain('sonnet');
+    expect(args).toContain('--session-id');
+    expect(args).toContain('sess-123');
+    expect(args).not.toContain('-r');
   });
 
   it('should build args for a resumed session', () => {
     const args = buildClaudeArgs(baseSession, true);
 
-    expect(args).toContain('--resume');
+    expect(args).toContain('-r');
     expect(args).toContain('sess-123');
+    expect(args).not.toContain('--session-id');
   });
 
   it('should include budget when specified', () => {
     const args = buildClaudeArgs(baseSession, false, { budgetUsd: 5.0 });
 
-    expect(args).toContain('--max-turns-cost');
+    expect(args).toContain('--max-budget-usd');
     expect(args).toContain('5');
   });
 
-  it('should map model names correctly', () => {
+  it('should map model names to short names', () => {
     const opusArgs = buildClaudeArgs({ ...baseSession, model: 'opus' }, false);
-    expect(opusArgs).toContain('claude-opus-4-20250514');
+    expect(opusArgs).toContain('opus');
 
     const haikuArgs = buildClaudeArgs({ ...baseSession, model: 'haiku' }, false);
-    expect(haikuArgs).toContain('claude-haiku-3-20250314');
+    expect(haikuArgs).toContain('haiku');
 
     const sonnetArgs = buildClaudeArgs({ ...baseSession, model: 'sonnet' }, false);
-    expect(sonnetArgs).toContain('claude-sonnet-4-20250514');
+    expect(sonnetArgs).toContain('sonnet');
   });
 });
 

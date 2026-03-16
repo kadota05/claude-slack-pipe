@@ -1,7 +1,16 @@
 import { z } from 'zod';
+import os from 'node:os';
+import path from 'node:path';
 import dotenv from 'dotenv';
 
 dotenv.config();
+
+function expandTilde(filePath: string): string {
+  if (filePath.startsWith('~/') || filePath === '~') {
+    return path.join(os.homedir(), filePath.slice(1));
+  }
+  return filePath;
+}
 
 function parseCommaSeparated(value: string | undefined): string[] {
   if (!value || value.trim() === '') return [];
@@ -34,8 +43,8 @@ export function loadConfig(): AppConfig {
     allowedUserIds: parseCommaSeparated(process.env.ALLOWED_USER_IDS),
     allowedTeamIds: parseCommaSeparated(process.env.ALLOWED_TEAM_IDS),
     adminUserIds: parseCommaSeparated(process.env.ADMIN_USER_IDS),
-    claudeExecutable: process.env.CLAUDE_EXECUTABLE || 'claude',
-    claudeProjectsDir: process.env.CLAUDE_PROJECTS_DIR || '~/.claude/projects',
+    claudeExecutable: expandTilde(process.env.CLAUDE_EXECUTABLE || 'claude'),
+    claudeProjectsDir: expandTilde(process.env.CLAUDE_PROJECTS_DIR || '~/.claude/projects'),
     maxConcurrentPerUser: Number(process.env.MAX_CONCURRENT_PER_USER || '1'),
     maxConcurrentGlobal: Number(process.env.MAX_CONCURRENT_GLOBAL || '3'),
     defaultTimeoutMs: Number(process.env.DEFAULT_TIMEOUT_MS || '300000'),

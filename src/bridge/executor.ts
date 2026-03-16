@@ -20,9 +20,9 @@ export interface BuildArgsOptions {
 }
 
 const MODEL_MAP: Record<ModelChoice, string> = {
-  opus: 'claude-opus-4-20250514',
-  sonnet: 'claude-sonnet-4-20250514',
-  haiku: 'claude-haiku-3-20250314',
+  opus: 'opus',
+  sonnet: 'sonnet',
+  haiku: 'haiku',
 };
 
 export function buildClaudeArgs(
@@ -30,16 +30,21 @@ export function buildClaudeArgs(
   isResume: boolean,
   opts?: BuildArgsOptions,
 ): string[] {
-  const args: string[] = ['-p', '--output-format', 'json'];
+  const args: string[] = [
+    '-p',
+    '--output-format', 'json',
+    '--permission-mode', 'bypassPermissions',
+    '--model', MODEL_MAP[session.model],
+  ];
 
   if (isResume) {
-    args.push('--resume', session.sessionId);
+    args.push('-r', session.sessionId);
+  } else {
+    args.push('--session-id', session.sessionId);
   }
 
-  args.push('--model', MODEL_MAP[session.model]);
-
   if (opts?.budgetUsd !== undefined) {
-    args.push('--max-turns-cost', String(opts.budgetUsd));
+    args.push('--max-budget-usd', String(opts.budgetUsd));
   }
 
   return args;
@@ -110,10 +115,16 @@ export class Executor {
       cwd: session.projectPath,
     });
 
-    const child = spawn(this.config.claudeExecutable, args, {
+    // Quote executable path to handle spaces (e.g. "Application Support")
+    const quotedExecutable = this.config.claudeExecutable.includes(' ')
+      ? `"${this.config.claudeExecutable}"`
+      : this.config.claudeExecutable;
+
+    const child = spawn(quotedExecutable, args, {
       cwd: session.projectPath,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: { ...process.env, CLAUDECODE: undefined },
+      shell: true,
     });
 
     const result = new Promise<ExecuteResult>((resolve, reject) => {
