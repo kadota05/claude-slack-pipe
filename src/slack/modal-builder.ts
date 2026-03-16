@@ -19,10 +19,6 @@ export function buildToolModal(config: ToolModalConfig): any {
 
   const blocks: Block[] = [
     {
-      type: 'header',
-      text: { type: 'plain_text', text: config.toolName },
-    },
-    {
       type: 'section',
       text: { type: 'mrkdwn', text: `*入力:*\n\`\`\`\n${formatInput(config.toolName, config.input)}\n\`\`\`` },
     },
@@ -53,12 +49,7 @@ export function buildToolModal(config: ToolModalConfig): any {
 }
 
 export function buildThinkingModal(thinkingTexts: string[]): any {
-  const blocks: Block[] = [
-    {
-      type: 'header',
-      text: { type: 'plain_text', text: '思考詳細' },
-    },
-  ];
+  const blocks: Block[] = [];
 
   for (const [i, text] of thinkingTexts.entries()) {
     if (i > 0) {
@@ -96,12 +87,7 @@ interface ToolGroupModalItem {
 }
 
 export function buildToolGroupModal(tools: ToolGroupModalItem[]): any {
-  const blocks: Block[] = [
-    {
-      type: 'header',
-      text: { type: 'plain_text', text: 'ツール実行詳細' },
-    },
-  ];
+  const blocks: Block[] = [];
 
   for (const tool of tools) {
     const icon = tool.isError ? ':x:' : ':white_check_mark:';
@@ -136,12 +122,7 @@ export function buildSubagentModal(
   description: string,
   flow: SubagentConversationFlow | null,
 ): any {
-  const blocks: Block[] = [
-    {
-      type: 'header',
-      text: { type: 'plain_text', text: truncate(`SubAgent: ${description}`, 24) },
-    },
-  ];
+  const blocks: Block[] = [];
 
   if (!flow) {
     blocks.push({
@@ -211,9 +192,7 @@ export function buildSubagentModal(
 }
 
 export function buildBundleDetailModal(entries: BundleEntry[], sessionId: string): any {
-  const blocks: Block[] = [
-    { type: 'header', text: { type: 'plain_text', text: 'アクション詳細' } },
-  ];
+  const blocks: Block[] = [];
 
   for (const [i, entry] of entries.entries()) {
     if (i > 0) blocks.push({ type: 'divider' });

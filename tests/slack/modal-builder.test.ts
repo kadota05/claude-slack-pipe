@@ -87,6 +87,19 @@ describe('buildToolModal', () => {
 
     expect(modal.close.text).toBeDefined();
   });
+
+  it('does not include a header block in body', () => {
+    const modal = buildToolModal({
+      toolId: 'toolu_001',
+      toolName: 'Read',
+      input: { file_path: '/a.ts' },
+      result: 'ok',
+      durationMs: 100,
+      isError: false,
+    });
+
+    expect(modal.blocks.filter((b: any) => b.type === 'header')).toHaveLength(0);
+  });
 });
 
 describe('buildThinkingModal', () => {
@@ -103,6 +116,11 @@ describe('buildThinkingModal', () => {
     const modal = buildThinkingModal(['a'.repeat(5000)]);
     const allText = JSON.stringify(modal.blocks);
     expect(allText.length).toBeLessThan(10000);
+  });
+
+  it('does not include a header block in body', () => {
+    const modal = buildThinkingModal(['some thought']);
+    expect(modal.blocks.filter((b: any) => b.type === 'header')).toHaveLength(0);
   });
 });
 
@@ -126,6 +144,13 @@ describe('buildToolGroupModal', () => {
     ]);
     const allText = JSON.stringify(modal.blocks);
     expect(allText).toContain(':x:');
+  });
+
+  it('does not include a header block in body', () => {
+    const modal = buildToolGroupModal([
+      { toolUseId: 'toolu_001', toolName: 'Read', oneLiner: 'a.ts', durationMs: 100, isError: false },
+    ]);
+    expect(modal.blocks.filter((b: any) => b.type === 'header')).toHaveLength(0);
   });
 });
 
@@ -171,6 +196,14 @@ describe('buildBundleDetailModal', () => {
     const modal = buildBundleDetailModal(entries, 'sess-1');
     expect(modal.blocks.length).toBeGreaterThanOrEqual(4);
   });
+
+  it('does not include a header block in body', () => {
+    const entries: BundleEntry[] = [
+      { type: 'thinking', texts: ['some thought'] },
+    ];
+    const modal = buildBundleDetailModal(entries, 'sess-1');
+    expect(modal.blocks.filter((b: any) => b.type === 'header')).toHaveLength(0);
+  });
 });
 
 describe('buildSubagentModal', () => {
@@ -199,5 +232,10 @@ describe('buildSubagentModal', () => {
     const modal = buildSubagentModal('コード探索', null);
     const allText = JSON.stringify(modal.blocks);
     expect(allText).toContain('取得できませんでした');
+  });
+
+  it('does not include a header block in body', () => {
+    const modal = buildSubagentModal('コード探索', null);
+    expect(modal.blocks.filter((b: any) => b.type === 'header')).toHaveLength(0);
   });
 });
