@@ -220,4 +220,38 @@ describe('PersistentSession', () => {
       JSON.stringify({ type: 'control', subtype: 'set_model', model: 'opus' }) + '\n'
     );
   });
+
+  it('sends keep_alive control message periodically when idle', () => {
+    session.spawn();
+    mockProc.stdout.emit('data', Buffer.from(
+      JSON.stringify({ type: 'system', subtype: 'init' }) + '\n'
+    ));
+    expect(session.state).toBe('idle');
+
+    // Advance 5 minutes
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(mockProc.stdin.write).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'control', subtype: 'keep_alive' }) + '\n'
+    );
+  });
+
+  it('stops keep_alive when processing', () => {
+    session.spawn();
+    mockProc.stdout.emit('data', Buffer.from(
+      JSON.stringify({ type: 'system', subtype: 'init' }) + '\n'
+    ));
+    session.sendPrompt('Hello');
+
+    // Clear mock calls from sendPrompt
+    mockProc.stdin.write.mockClear();
+
+    // Advance 5 minutes - should NOT send keep_alive while processing
+    vi.advanceTimersByTime(5 * 60 * 1000);
+
+    // The only write should NOT be a keep_alive
+    const keepAliveCalls = mockProc.stdin.write.mock.calls.filter(
+      (call: any[]) => call[0].includes('keep_alive')
+    );
+    expect(keepAliveCalls).toHaveLength(0);
+  });
 });

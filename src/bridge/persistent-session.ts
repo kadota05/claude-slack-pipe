@@ -11,6 +11,7 @@ import type {
 } from '../types.js';
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+const KEEP_ALIVE_INTERVAL_MS = 5 * 60 * 1000;
 const KILL_GRACE_MS = 5_000;
 
 export class PersistentSession extends EventEmitter {
@@ -18,6 +19,7 @@ export class PersistentSession extends EventEmitter {
   private _state: SessionState = 'not_started';
   private process: ChildProcess | null = null;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
   private killTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly params: SessionStartParams;
   private stdoutBuffer = '';
@@ -186,12 +188,19 @@ export class PersistentSession extends EventEmitter {
       logger.info(`[${this.sessionId}] idle timeout — ending session`);
       this.end();
     }, IDLE_TIMEOUT_MS);
+    this.keepAliveTimer = setInterval(() => {
+      this.writeStdin({ type: 'control', subtype: 'keep_alive' });
+    }, KEEP_ALIVE_INTERVAL_MS);
   }
 
   private clearIdleTimer(): void {
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
+    }
+    if (this.keepAliveTimer) {
+      clearInterval(this.keepAliveTimer);
+      this.keepAliveTimer = null;
     }
   }
 }
