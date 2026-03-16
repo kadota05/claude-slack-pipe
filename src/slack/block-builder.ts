@@ -182,7 +182,11 @@ export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
       elements: [{ type: 'mrkdwn', text: '_No recent sessions_' }],
     });
   } else {
-    for (const s of recentSessions) {
+    for (let i = 0; i < recentSessions.length; i++) {
+      const s = recentSessions[i];
+      if (i > 0) {
+        blocks.push({ type: 'divider' });
+      }
       blocks.push(
         {
           type: 'section',
