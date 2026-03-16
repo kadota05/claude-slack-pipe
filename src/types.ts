@@ -454,3 +454,17 @@ export interface SystemInitEvent extends StreamEvent {
   subtype: 'init';
   session_id?: string;
 }
+
+// ============================================================
+// Phase 2: User Preferences
+// ============================================================
+
+export interface UserPreferences {
+  defaultModel: string;
+  activeDirectoryId: string | null;
+}
+
+export interface UserPreferenceFile {
+  version: 1;
+  users: Record<string, UserPreferences>;
+}
