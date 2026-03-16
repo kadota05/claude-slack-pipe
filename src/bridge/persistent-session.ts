@@ -48,7 +48,13 @@ export class PersistentSession extends EventEmitter {
     this.process = spawn(executable, args, {
       cwd: this.params.projectPath,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: (() => {
+        const env = { ...process.env };
+        // Remove nesting detection vars so Claude CLI doesn't refuse to start
+        delete env.CLAUDECODE;
+        delete env.CLAUDE_CODE_ENTRYPOINT;
+        return env;
+      })(),
     });
 
     this.process.stdout!.on('data', (chunk: Buffer) => this.handleStdout(chunk));

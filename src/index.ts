@@ -66,8 +66,9 @@ async function main(): Promise<void> {
 
   // --- Message Handler ---
   async function handleMessage(event: any): Promise<void> {
-    if (event.channel_type !== 'im') return;
-    if (event.bot_id || event.subtype) return;
+    logger.info('[DEBUG] handleMessage called', { type: event.type, channel_type: event.channel_type, bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 50), user: event.user });
+    if (event.channel_type !== 'im') { logger.info('[DEBUG] skipped: not im'); return; }
+    if (event.bot_id || event.subtype) { logger.info('[DEBUG] skipped: bot_id or subtype', { bot_id: event.bot_id, subtype: event.subtype }); return; }
 
     const userId = event.user;
     const channelId = event.channel;
@@ -75,6 +76,7 @@ async function main(): Promise<void> {
     const threadTs = event.thread_ts || event.ts;
     const text = sanitizeUserInput(event.text || '');
 
+    logger.info('[DEBUG] auth check', { userId, allowed: auth.isAllowed(userId) });
     // Auth + Rate limit
     if (!auth.isAllowed(userId)) {
       logger.warn('Unauthorized user', { userId });
@@ -394,6 +396,7 @@ async function main(): Promise<void> {
   // --- Bolt Event Handlers ---
 
   app.event('message', async ({ event }) => {
+    logger.info('[DEBUG] Bolt message event received', { event_type: (event as any).type, channel_type: (event as any).channel_type });
     await handleMessage(event);
   });
 
