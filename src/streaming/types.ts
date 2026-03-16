@@ -106,3 +106,60 @@ export interface ContentBlockDelta {
   partial_json?: string;
   signature?: string;
 }
+
+// --- Group Tracking ---
+
+export type GroupCategory = 'thinking' | 'tool' | 'subagent';
+
+export interface GroupToolInfo {
+  toolUseId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  oneLiner: string;
+  status: 'running' | 'completed' | 'error';
+  startTime: number;   // Date.now() when tool_use received
+  durationMs?: number;
+  result?: string;
+  isError?: boolean;
+}
+
+export interface GroupStepInfo {
+  toolName: string;
+  toolUseId: string;
+  oneLiner: string;
+  status: 'running' | 'completed' | 'error';
+}
+
+export interface ActiveGroup {
+  id: string;
+  category: GroupCategory;
+  messageTs: string | null;
+  startTime: number;
+  lastUpdateTime: number;
+
+  // thinking
+  thinkingTexts: string[];
+
+  // tool
+  tools: GroupToolInfo[];
+
+  // subagent
+  agentToolUseId?: string;
+  agentDescription?: string;
+  agentId?: string; // extracted from tool_result for JSONL lookup
+  agentSteps: GroupStepInfo[];
+}
+
+export type GroupAction =
+  | { type: 'postMessage'; groupId: string; blocks: Block[]; text: string; category: GroupCategory }
+  | { type: 'update'; groupId: string; messageTs: string; blocks: Block[]; text: string; category: GroupCategory }
+  | { type: 'collapse'; groupId: string; messageTs: string; blocks: Block[]; text: string; category: GroupCategory };
+
+export interface ProcessedActions {
+  groupActions: GroupAction[];
+  textAction?: SlackAction;
+  resultEvent?: any;
+}
+
+// Reusable block type
+export type Block = Record<string, unknown>;
