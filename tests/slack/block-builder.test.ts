@@ -4,6 +4,9 @@ import {
   buildCollapsedAnchorBlocks,
   buildErrorBlocks,
   buildResultBlocks,
+  buildResponseFooter,
+  buildThreadHeaderText,
+  buildStreamingBlocks,
 } from '../../src/slack/block-builder.js';
 import type { SessionMetadata } from '../../src/types.js';
 
@@ -99,5 +102,60 @@ describe('buildResultBlocks', () => {
 
     const contextBlock = blocks.find((b: any) => b.type === 'context');
     expect(contextBlock).toBeDefined();
+  });
+});
+
+describe('buildResponseFooter', () => {
+  it('formats cost, tokens, model, and duration', () => {
+    const blocks = buildResponseFooter({
+      inputTokens: 1200,
+      outputTokens: 3400,
+      costUsd: 0.042,
+      model: 'sonnet',
+      durationMs: 12300,
+    });
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe('context');
+    const text = (blocks[0] as any).elements[0].text;
+    expect(text).toContain('1.2k');
+    expect(text).toContain('3.4k');
+    expect(text).toContain('$0.042');
+    expect(text).toContain('sonnet');
+    expect(text).toContain('12.3s');
+  });
+
+  it('handles zero cost', () => {
+    const blocks = buildResponseFooter({
+      inputTokens: 0, outputTokens: 0, costUsd: 0, model: 'haiku', durationMs: 500,
+    });
+    expect(blocks).toHaveLength(1);
+  });
+});
+
+describe('buildThreadHeaderText', () => {
+  it('includes project dir basename, model, session ID', () => {
+    const text = buildThreadHeaderText({
+      projectPath: '/Users/alice/dev/myapp',
+      model: 'sonnet',
+      sessionId: 'abc12345',
+    });
+    expect(text).toContain('myapp');
+    expect(text).toContain('sonnet');
+    expect(text).toContain('abc12345');
+  });
+});
+
+describe('buildStreamingBlocks', () => {
+  it('builds blocks for partial assistant text', () => {
+    const blocks = buildStreamingBlocks({ text: 'Thinking about...', isComplete: false });
+    expect(blocks.length).toBeGreaterThan(0);
+    const textBlock = blocks.find((b: any) => b.type === 'section');
+    expect(textBlock).toBeDefined();
+  });
+
+  it('does not show progress indicator when complete', () => {
+    const blocks = buildStreamingBlocks({ text: 'Final answer', isComplete: true });
+    const ctx = blocks.find((b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('応答中'));
+    expect(ctx).toBeUndefined();
   });
 });

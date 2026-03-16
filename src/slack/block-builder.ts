@@ -294,3 +294,54 @@ export function buildHomeTabBlocks(
 
   return blocks;
 }
+
+function formatTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
+
+function formatDuration(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+export function buildResponseFooter(params: {
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  model: string;
+  durationMs: number;
+}): any[] {
+  const text = `📊 ${formatTokens(params.inputTokens)}→${formatTokens(params.outputTokens)} tokens | $${params.costUsd.toFixed(3)} | ${params.model} | ${formatDuration(params.durationMs)}`;
+  return [{
+    type: 'context',
+    elements: [{ type: 'mrkdwn', text }],
+  }];
+}
+
+export function buildThreadHeaderText(params: {
+  projectPath: string;
+  model: string;
+  sessionId: string;
+}): string {
+  return `📋 Session Started\n📁 ${params.projectPath}\nModel: ${params.model} | Session: ${params.sessionId}`;
+}
+
+export function buildStreamingBlocks(params: {
+  text: string;
+  isComplete: boolean;
+}): any[] {
+  const blocks: any[] = [];
+  if (params.text) {
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: params.text.slice(0, 3000) },
+    });
+  }
+  if (!params.isComplete) {
+    blocks.push({
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: '⏳ _応答中..._' }],
+    });
+  }
+  return blocks;
+}
