@@ -39,12 +39,17 @@ GroupTracker上に追加するレイヤー。text間のグループ群を1つの
 ```typescript
 interface ActionBundle {
   id: string;                       // bundle-1, bundle-2, ...
-  index: number;                    // 0-indexed、JSONLスキャン用
+  index: number;                    // 0-indexed、JSONLスキャン用。GroupTrackerが内部カウンタで採番する。
   messageTs: string | null;         // Slack postMessageで取得
   completedGroups: CompletedGroup[]; // 完了済みグループ（時系列順）
-  activeGroup: ActiveGroup | null;  // 現在ライブのグループ（1つだけ）
+  activeGroup: ActiveGroup | null;  // 現在ライブのグループ（1つだけ）。既存のActiveGroup型をそのまま使う。
 }
 
+// CompletedGroupはActiveGroupから変換して作成する。
+// activeGroupがcompletedGroupsに移動する際、ActiveGroupのフィールドから以下のようにマッピングする:
+//   ActiveGroup.thinkingTexts → CompletedGroup.thinkingTexts
+//   ActiveGroup.tools         → CompletedGroup.tools, totalDuration
+//   ActiveGroup.agentToolUseId, agentDescription, agentId, agentSteps → CompletedGroup の各subagentフィールド
 interface CompletedGroup {
   category: 'thinking' | 'tool' | 'subagent';
   // thinking用
@@ -61,9 +66,10 @@ interface CompletedGroup {
 ```
 
 - バンドルは1つのmessageTsを持ち、カテゴリが切り替わってもメッセージは同じ
-- `completedGroups` はcollapse時のカテゴリ集約に使う
+- `completedGroups` はcollapse時のカテゴリ集約に使う（ライブ中はインメモリ保持のみ、バンドル確定後は不要）
 - `activeGroup` は既存のActiveGroupをそのまま流用
 - textが来たらバンドルが確定し、次のtext間アクション用に新バンドルが始まる
+- `index` はGroupTrackerの内部カウンタで管理。text到着でバンドル確定するたびにインクリメント
 
 ## ライブ表示の更新フロー
 
@@ -81,6 +87,7 @@ interface CompletedGroup {
    → activeGroupをcompletedGroupsに移動
    → activeGroup = new ToolGroup
    → chat.update(toolライブブロック) ※前カテゴリの表示は消えて単純差し替え
+     （意図的な設計判断: ライブ中は最新カテゴリのみ表示。過去のカテゴリはバンドル確定後にモーダルで確認可能）
 
 4. さらにカテゴリ切り替え(例: tool → subagent)
    → activeGroupをcompletedGroupsに移動
@@ -127,6 +134,8 @@ actions block:  [詳細を見る]  action_id: view_bundle:{sessionId}:{bundleInd
 
 `view_bundle:{sessionId}:{bundleIndex}` クリック時にSessionJsonlReaderでJSONLをスキャンして構築。
 
+新しいBoltハンドラ `app.action(/^view_bundle:/)` を登録する。
+
 ```
 ┌─ バンドル詳細 ──────────────────────────────────────────┐
 │ 💭 思考                                                  │
@@ -147,13 +156,27 @@ actions block:  [詳細を見る]  action_id: view_bundle:{sessionId}:{bundleInd
 
 表示ルール:
 - 💭 thinking: テキスト冒頭を直接表示。詳細ボタンなし
-- 🔧 tool: ワンライナー + 所要時間 + 詳細ボタン
-- 🤖 subagent: description + 所要時間 + 詳細ボタン
+- 🔧 tool: ワンライナー + 所要時間 + 詳細ボタン（action_id: `view_tool_detail:{sessionId}:{toolUseId}`）
+- 🤖 subagent: description + 所要時間 + 詳細ボタン（action_id: `view_subagent_detail:{sessionId}:{toolUseId}`）
+
+#### モーダル構築関数
+
+```typescript
+// modal-builder.ts に追加
+buildBundleDetailModal(entries: BundleEntry[], sessionId: string): ModalView
+
+// BundleEntry[] を走査し、各エントリに対して:
+//   thinking → section block (テキスト冒頭50文字 + divider)
+//   tool     → section block (ワンライナー + 時間) + button accessory
+//   subagent → section block (description + 時間) + button accessory
+```
 
 ### 第2階層: 既存モーダルを流用
 
-- tool [詳細を見る] → 既存の tool詳細モーダル (input/output全文)
-- subagent [詳細を見る] → 既存の SubAgentモーダル (JSONL会話フロー)
+- tool [詳細を見る] → SessionJsonlReader.readToolDetail() で取得 → 既存の tool詳細モーダル (input/output全文)
+- subagent [詳細を見る] → SessionJsonlReader経由 → 既存の SubAgentモーダル (JSONL会話フロー)
+
+第2階層のボタンは `view_tool_detail:{sessionId}:{toolUseId}` / `view_subagent_detail:{sessionId}:{toolUseId}` を使い、既存の `view_group_detail:{groupId}` とは別のハンドラとして登録する。
 
 ## データソース: 完全JSONL駆動
 
@@ -201,7 +224,12 @@ BundleEntry =
 1. JSONLを先頭からスキャン
 2. textブロックの出現をカウント
 3. bundleIndex番目のtext前の非textイベント群を収集
-4. 収集したイベント群を時系列順で返す
+4. subagentの判別: tool_useのnameが `Agent` の場合はsubagentとして扱う。
+   subagentの子ツール（parent_tool_use_id付き）はsubagentエントリ内に含め、
+   トップレベルのBundleEntryとしては出さない。
+5. thinking内テキストの粒度: JSONL内のthinkingブロック1つ = texts配列の1要素。
+   連続するthinkingブロック（カテゴリ切り替えなし）は1つのBundleEntry(type:'thinking')にまとめる。
+6. 収集したイベント群を時系列順で返す
 
 ## GroupActionの変更
 
@@ -215,3 +243,21 @@ collapse:    text到着 or ストリーム終了時（バンドル確定）
 ```
 
 index.ts側の変更は最小限。`groupId` → `bundleId` に変わるだけで、SerialActionQueueのpostMessage → ts登録 → updateの流れは同じ。
+
+## 既存コードからの移行
+
+### 廃止するもの
+
+- `view_group_detail:{groupId}` ハンドラ → `view_bundle:{sessionId}:{bundleIndex}` に置き換え
+- `ToolResultCache` のグループデータキャッシュ (`setGroupData`/`getGroupData`) → JSONLスキャンに置き換え
+- `ToolResultCache` のツール結果キャッシュ (`setToolResult`/`getToolResult`) → `SessionJsonlReader.readToolDetail` に置き換え
+- GroupTrackerの既存の `completedGroups: Map` → ActionBundle内の `completedGroups: CompletedGroup[]` に置き換え
+
+### 新規追加するもの
+
+- `app.action(/^view_bundle:/)` ハンドラ（第1階層モーダル）
+- `app.action(/^view_tool_detail:/)` ハンドラ（第2階層: ツール詳細）
+- `app.action(/^view_subagent_detail:/)` ハンドラ（第2階層: SubAgent詳細）
+- `SessionJsonlReader.readBundle()` メソッド
+- `modal-builder.ts` の `buildBundleDetailModal()` 関数
+- GroupTracker内のActionBundleライフサイクル管理
