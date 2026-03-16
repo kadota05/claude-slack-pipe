@@ -372,7 +372,7 @@ export interface ResultEvent extends StreamEvent {
   result?: string;
   total_cost_usd?: number;
   duration_ms?: number;
-  usage?: { input_tokens: number; output_tokens: number };
+  usage?: TokenUsage;
   session_id?: string;
 }
 
@@ -416,4 +416,16 @@ export interface SessionIndexEntry {
 export interface SessionIndexFile {
   version: 1;
   sessions: Record<string, SessionIndexEntry>; // keyed by cliSessionId
+}
+
+// ============================================================
+// Recent Session (Home Tab)
+// ============================================================
+
+export interface RecentSession {
+  sessionId: string;
+  projectPath: string;
+  mtime: Date;
+  firstPrompt: string;
+  firstPromptPreview: string;
 }
