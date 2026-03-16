@@ -18,10 +18,13 @@ import { sanitizeUserInput } from './utils/sanitizer.js';
 import { buildResponseFooter, buildThreadHeaderText } from './slack/block-builder.js';
 import fs from 'node:fs';
 import type { PersistentSession } from './bridge/persistent-session.js';
+import { acquirePidLock } from './utils/pid-lock.js';
 import { StreamProcessor } from './streaming/stream-processor.js';
 import { SlackActionExecutor } from './streaming/slack-action-executor.js';
 import { ToolResultCache } from './streaming/tool-result-cache.js';
-import { buildToolModal } from './slack/modal-builder.js';
+import { buildToolModal, buildThinkingModal, buildToolGroupModal, buildSubagentModal } from './slack/modal-builder.js';
+import { SerialActionQueue } from './streaming/serial-action-queue.js';
+import { SubagentJsonlReader } from './streaming/subagent-jsonl-reader.js';
 
 function waitForIdle(session: PersistentSession, timeoutMs = 300000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -44,6 +47,9 @@ async function main(): Promise<void> {
 
   // Ensure data directory exists
   fs.mkdirSync(config.dataDir, { recursive: true });
+
+  // Singleton lock — prevent duplicate instances
+  const pidLock = acquirePidLock(config.dataDir);
 
   const app = createApp(config);
 
@@ -336,103 +342,156 @@ async function main(): Promise<void> {
     if (wiredSessions.has(session.sessionId)) return;
     wiredSessions.add(session.sessionId);
 
-    // --- Streaming: StreamProcessor + Executor ---
     const executor = new SlackActionExecutor(client);
     const streamProcessor = new StreamProcessor({ channel: channelId, threadTs });
+    const serialQueue = new SerialActionQueue();
 
-    // Track pending action promises so we can await them before posting footer
-    let pendingActions: Promise<void>[] = [];
-
-    // Wire StreamProcessor actions to Slack executor
-    streamProcessor.on('action', (action: any) => {
-      const promise = (async () => {
-        const result = await executor.execute(action);
-        if (result.ok && result.ts) {
-          if (action.metadata.toolUseId) {
-            streamProcessor.registerMessageTs(action.metadata.toolUseId, result.ts);
-          }
-          if (action.metadata.messageType === 'text' && action.type === 'postMessage') {
-            streamProcessor.registerTextMessageTs(result.ts);
-          }
-        }
-      })();
-      pendingActions.push(promise);
+    serialQueue.onError((err) => {
+      logger.error('SerialActionQueue error', { error: err.message });
     });
 
-    session.on('message', async (event: any) => {
-      try {
-        // Feed ALL events to StreamProcessor (handles tools, thinking, and text)
-        streamProcessor.processEvent(event);
+    // Convert GroupAction to SlackAction for the executor
+    function convertGroupActionToSlackAction(ga: any): any {
+      const priority = ga.type === 'update' ? 4 : 3;
+      return {
+        type: ga.type === 'postMessage' ? 'postMessage' : 'update',
+        priority,
+        channel: channelId,
+        threadTs,
+        messageTs: ga.messageTs,
+        blocks: ga.blocks,
+        text: ga.text || '',
+        metadata: {
+          messageType: ga.category || 'tool_use',
+          groupId: ga.groupId,
+        },
+      };
+    }
 
-        // Cache tool results for modal display
-        if (event.type === 'user' && event.message?.content) {
-          for (const block of event.message.content) {
-            if (block.type === 'tool_result' && block.tool_use_id) {
-              const tracker = streamProcessor.getState().activeToolUses.get(block.tool_use_id);
-              if (tracker) {
-                toolResultCache.set(block.tool_use_id, {
-                  toolId: block.tool_use_id,
-                  toolName: tracker.toolName,
-                  input: tracker.input,
-                  result: typeof block.content === 'string' ? block.content : JSON.stringify(block.content),
-                  durationMs: tracker.durationMs || 0,
-                  isError: tracker.isError || false,
+    session.on('message', (event: any) => {
+      serialQueue.enqueue(async () => {
+        try {
+          // 1. Process event synchronously — returns actions
+          const { groupActions, textAction, resultEvent } = streamProcessor.processEvent(event);
+
+          // 2. Execute group actions sequentially
+          for (const ga of groupActions) {
+            const slackAction = convertGroupActionToSlackAction(ga);
+            const result = await executor.execute(slackAction);
+            if (result.ok && result.ts && ga.type === 'postMessage') {
+              streamProcessor.registerGroupMessageTs(ga.groupId, result.ts);
+            }
+          }
+
+          // 3. Cache group data for modals on collapse
+          for (const ga of groupActions) {
+            if (ga.type === 'collapse') {
+              const groupData = streamProcessor.getGroupData(ga.groupId);
+              if (groupData) {
+                const entry = indexStore.findByThreadTs(threadTs);
+                toolResultCache.setGroupData(ga.groupId, {
+                  category: groupData.category,
+                  thinkingTexts: groupData.thinkingTexts,
+                  tools: groupData.tools.map(t => ({
+                    toolUseId: t.toolUseId,
+                    toolName: t.toolName,
+                    input: t.input,
+                    oneLiner: t.oneLiner,
+                    durationMs: t.durationMs,
+                    isError: t.isError,
+                  })),
+                  agentDescription: groupData.agentDescription,
+                  agentId: groupData.agentId,
+                  sessionId: entry?.cliSessionId,
+                  projectPath: entry?.projectPath,
                 });
               }
             }
           }
+
+          // 4. Cache individual tool results for modal display
+          if (event.type === 'user' && event.message?.content) {
+            for (const block of event.message.content) {
+              if (block.type === 'tool_result' && block.tool_use_id) {
+                const resultText = typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
+                // Find tool info from GroupTracker's groups
+                let toolName = '';
+                let toolInput: Record<string, unknown> = {};
+                let toolDuration = 0;
+                for (const ga of groupActions) {
+                  const gd = streamProcessor.getGroupData(ga.groupId);
+                  const toolInfo = gd?.tools?.find(t => t.toolUseId === block.tool_use_id);
+                  if (toolInfo) {
+                    toolName = toolInfo.toolName;
+                    toolInput = toolInfo.input;
+                    toolDuration = toolInfo.durationMs || 0;
+                    break;
+                  }
+                }
+                toolResultCache.set(block.tool_use_id, {
+                  toolId: block.tool_use_id,
+                  toolName,
+                  input: toolInput,
+                  result: resultText,
+                  durationMs: toolDuration,
+                  isError: block.is_error === true,
+                });
+              }
+            }
+          }
+
+          // 5. Execute text action
+          if (textAction) {
+            const result = await executor.execute(textAction);
+            if (result.ok && result.ts && textAction.type === 'postMessage') {
+              streamProcessor.registerTextMessageTs(result.ts);
+            }
+          }
+
+          // 6. Handle result event
+          if (resultEvent) {
+            logger.info(`[${session.sessionId}] result event received`);
+
+            const usage = resultEvent.usage || {};
+            const contextTokens = (usage.input_tokens || 0)
+              + (usage.cache_read_input_tokens || 0)
+              + (usage.cache_creation_input_tokens || 0)
+              + (usage.output_tokens || 0);
+
+            const sessionModel = indexStore.findByThreadTs(threadTs)?.model || '';
+            const contextWindow = sessionModel.includes('haiku') ? 200_000 : 1_000_000;
+
+            const footerBlocks = buildResponseFooter({
+              inputTokens: usage.input_tokens || 0,
+              outputTokens: usage.output_tokens || 0,
+              contextTokens,
+              contextWindow,
+              model: indexStore.findByThreadTs(threadTs)?.model || 'unknown',
+              durationMs: resultEvent.duration_ms || 0,
+            });
+
+            await client.chat.postMessage({
+              channel: channelId,
+              thread_ts: threadTs,
+              blocks: footerBlocks,
+              text: 'Complete',
+            });
+
+            const msgTs = activeMessageTs.get(session.sessionId) || threadTs;
+            await rm.replaceWithDone(channelId, msgTs);
+            activeMessageTs.delete(session.sessionId);
+
+            indexStore.update(
+              indexStore.findByThreadTs(threadTs)?.cliSessionId || '',
+              { lastActiveAt: new Date().toISOString() },
+            );
+
+            streamProcessor.reset();
+          }
+        } catch (err) {
+          logger.error('Error handling session message', { error: (err as Error).message });
         }
-
-        // --- Result handling ---
-        if (event.type === 'result') {
-          logger.info(`[${session.sessionId}] result event received`);
-
-          // Wait for ALL pending Slack actions (text post, text update, tool updates)
-          // to complete before posting footer. This guarantees correct message order.
-          await Promise.all(pendingActions);
-          pendingActions = [];
-
-          const usage = event.usage || {};
-          const contextTokens = (usage.input_tokens || 0)
-            + (usage.cache_read_input_tokens || 0)
-            + (usage.cache_creation_input_tokens || 0)
-            + (usage.output_tokens || 0);
-
-          const sessionModel = indexStore.findByThreadTs(threadTs)?.model || '';
-          const contextWindow = sessionModel.includes('haiku') ? 200_000 : 1_000_000;
-
-          const footerBlocks = buildResponseFooter({
-            inputTokens: usage.input_tokens || 0,
-            outputTokens: usage.output_tokens || 0,
-            contextTokens,
-            contextWindow,
-            model: indexStore.findByThreadTs(threadTs)?.model || 'unknown',
-            durationMs: event.duration_ms || 0,
-          });
-
-          // Post footer AFTER all text/tool messages are confirmed posted
-          await client.chat.postMessage({
-            channel: channelId,
-            thread_ts: threadTs,
-            blocks: footerBlocks,
-            text: 'Complete',
-          });
-
-          const msgTs = activeMessageTs.get(session.sessionId) || threadTs;
-          await rm.replaceWithDone(channelId, msgTs);
-          activeMessageTs.delete(session.sessionId);
-
-          indexStore.update(
-            indexStore.findByThreadTs(threadTs)?.cliSessionId || '',
-            { lastActiveAt: new Date().toISOString() },
-          );
-
-          // Reset StreamProcessor for next turn
-          streamProcessor.reset();
-        }
-      } catch (err) {
-        logger.error('Error handling session message', { error: (err as Error).message });
-      }
+      });
     });
 
     session.on('error', async (err: Error) => {
@@ -443,12 +502,9 @@ async function main(): Promise<void> {
           thread_ts: threadTs,
           text: `Error: ${err.message}`,
         });
-      } catch {
-        // Ignore Slack API errors during error handling
-      }
+      } catch { /* ignore */ }
     });
 
-    // Cleanup on session death
     session.on('stateChange', (_from: string, to: string) => {
       if (to === 'dead' || to === 'ending') {
         streamProcessor.dispose();
@@ -571,6 +627,55 @@ async function main(): Promise<void> {
     });
   });
 
+  // --- Group Detail Modal Action ---
+  const subagentReader = new SubagentJsonlReader(config.claudeProjectsDir);
+
+  app.action(/^view_group_detail:/, async ({ ack, body }: any) => {
+    await ack();
+    const actionId = body.actions?.[0]?.action_id || '';
+    const groupId = actionId.split(':')[1];
+    if (!groupId) return;
+
+    const groupData = toolResultCache.getGroupData(groupId);
+    if (!groupData) {
+      logger.warn(`No cached group data for ${groupId}`);
+      return;
+    }
+
+    let modal: any;
+
+    if (groupData.category === 'thinking') {
+      modal = buildThinkingModal(groupData.thinkingTexts || []);
+    } else if (groupData.category === 'tool') {
+      modal = buildToolGroupModal(
+        (groupData.tools || []).map(t => ({
+          toolUseId: t.toolUseId,
+          toolName: t.toolName,
+          oneLiner: t.oneLiner,
+          durationMs: t.durationMs || 0,
+          isError: t.isError || false,
+        })),
+      );
+    } else if (groupData.category === 'subagent') {
+      let flow = null;
+      if (groupData.agentId && groupData.sessionId && groupData.projectPath) {
+        flow = await subagentReader.read(
+          groupData.projectPath,
+          groupData.sessionId,
+          groupData.agentId,
+        );
+      }
+      modal = buildSubagentModal(groupData.agentDescription || 'SubAgent', flow);
+    }
+
+    if (modal) {
+      await app.client.views.open({
+        trigger_id: body.trigger_id,
+        view: modal,
+      });
+    }
+  });
+
   // --- Start ---
   await startApp(app);
   logger.info('Claude Code Slack Bridge is running (Phase 2)');
@@ -582,6 +687,7 @@ async function main(): Promise<void> {
     for (const entry of sessionIndexStore.getActive()) {
       coordinator.endSession(entry.cliSessionId);
     }
+    pidLock.release();
     await app.stop();
     process.exit(0);
   };
