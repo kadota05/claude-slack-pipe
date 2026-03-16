@@ -7,11 +7,13 @@ import type {
   SlackAction,
   ProcessedActions,
   Block,
+  BundleAction,
 } from './types.js';
 
 interface StreamProcessorConfig {
   channel: string;
   threadTs: string;
+  sessionId: string;
 }
 
 export class StreamProcessor {
@@ -27,7 +29,7 @@ export class StreamProcessor {
 
   processEvent(event: any): ProcessedActions {
     const parentToolUseId = event.parent_tool_use_id || null;
-    const result: ProcessedActions = { groupActions: [] };
+    const result: ProcessedActions = { bundleActions: [] };
 
     if (event.type === 'assistant' && event.message?.content) {
       this.handleAssistant(event.message.content, parentToolUseId, result);
@@ -40,20 +42,20 @@ export class StreamProcessor {
     return result;
   }
 
-  registerGroupMessageTs(groupId: string, messageTs: string): void {
-    this.groupTracker.registerMessageTs(groupId, messageTs);
+  registerBundleMessageTs(bundleId: string, messageTs: string): void {
+    this.groupTracker.registerBundleMessageTs(bundleId, messageTs);
   }
 
   registerTextMessageTs(messageTs: string): void {
     this.textMessageTs = messageTs;
   }
 
-  setAgentId(groupId: string, agentId: string): void {
-    this.groupTracker.setAgentId(groupId, agentId);
+  setAgentId(agentId: string): void {
+    this.groupTracker.setAgentId(agentId);
   }
 
-  getGroupData(groupId: string) {
-    return this.groupTracker.getGroupData(groupId);
+  getActiveGroupData() {
+    return this.groupTracker.getActiveGroupData();
   }
 
   getAccumulatedText(): string {
@@ -73,7 +75,7 @@ export class StreamProcessor {
     for (const block of content) {
       if (block.type === 'thinking') {
         const actions = this.groupTracker.handleThinking(block.thinking);
-        result.groupActions.push(...actions);
+        result.bundleActions.push(...actions);
       } else if (block.type === 'tool_use') {
         this.handleToolUse(block, parentToolUseId, result);
       } else if (block.type === 'text' && block.text) {
@@ -91,7 +93,7 @@ export class StreamProcessor {
     if (parentToolUseId) {
       const oneLiner = getToolOneLiner(toolName, input);
       const actions = this.groupTracker.handleSubagentStep(parentToolUseId, toolName, toolUseId, oneLiner);
-      result.groupActions.push(...actions);
+      result.bundleActions.push(...actions);
       return;
     }
 
@@ -99,21 +101,30 @@ export class StreamProcessor {
     if (toolName === 'Agent') {
       const description = String(input.description || input.prompt || 'SubAgent');
       const actions = this.groupTracker.handleSubagentStart(toolUseId, description);
-      result.groupActions.push(...actions);
+      result.bundleActions.push(...actions);
       return;
     }
 
     // Normal tool
     const actions = this.groupTracker.handleToolUse(toolUseId, toolName, input);
-    result.groupActions.push(...actions);
+    result.bundleActions.push(...actions);
   }
 
   private handleText(text: string, result: ProcessedActions): void {
     // Collapse any active group before text
-    const collapseActions = this.groupTracker.handleTextStart();
-    result.groupActions.push(...collapseActions);
+    const collapseActions = this.groupTracker.handleTextStart(this.config.sessionId);
+    result.bundleActions.push(...collapseActions);
 
     this.textBuffer += text;
+
+    // Delay initial text post until buffer has enough content.
+    // Short intermediate text (e.g. "まず確認してみます。") before tool_use
+    // would otherwise be posted too early and appear above tool messages
+    // in the Slack thread. Buffer until >=100 chars to avoid this.
+    if (!this.textMessageTs && this.textBuffer.length < 100) {
+      return;
+    }
+
     const converted = convertMarkdownToMrkdwn(this.textBuffer);
     const blocks = this.buildTextBlocks(converted, false);
 
@@ -160,49 +171,63 @@ export class StreamProcessor {
     // Subagent child tool result
     if (parentToolUseId) {
       const actions = this.groupTracker.handleSubagentStepResult(parentToolUseId, toolUseId, isError);
-      result.groupActions.push(...actions);
+      result.bundleActions.push(...actions);
       return;
     }
 
     // Try subagent complete first (toolUseId matches the Agent tool's id)
-    const subagentActions = this.groupTracker.handleSubagentComplete(toolUseId, resultText, 0);
-    if (subagentActions.length > 0) {
-      // Extract agentId from result text for JSONL lookup
+    // Check if active group is a subagent with matching agentToolUseId before calling
+    const activeGroup = this.groupTracker.getActiveGroupData();
+    if (activeGroup && activeGroup.category === 'subagent' && activeGroup.agentToolUseId === toolUseId) {
+      // Extract agentId before handleSubagentComplete moves the group to completed
       const agentIdMatch = resultText.match(/agentId:\s*([\w]+)/);
       if (agentIdMatch) {
-        const collapsedAction = subagentActions.find(a => a.type === 'collapse');
-        if (collapsedAction) {
-          this.groupTracker.setAgentId(collapsedAction.groupId, agentIdMatch[1]);
-        }
+        this.groupTracker.setAgentId(agentIdMatch[1]);
       }
-      result.groupActions.push(...subagentActions);
+      const subagentActions = this.groupTracker.handleSubagentComplete(toolUseId, resultText, 0);
+      result.bundleActions.push(...subagentActions);
       return;
     }
 
     // Normal tool result — GroupTracker calculates durationMs internally from tool.startTime
     const actions = this.groupTracker.handleToolResult(toolUseId, resultText, isError);
-    result.groupActions.push(...actions);
+    result.bundleActions.push(...actions);
   }
 
   private handleResult(event: any, result: ProcessedActions): void {
     // Flush any active group
-    const flushActions = this.groupTracker.flushActiveGroup();
-    result.groupActions.push(...flushActions);
+    const flushActions = this.groupTracker.flushActiveBundle(this.config.sessionId);
+    result.bundleActions.push(...flushActions);
 
-    // Finalize text
-    if (this.textMessageTs && this.textBuffer) {
+    // Finalize text — post or update depending on whether already posted
+    if (this.textBuffer) {
       const converted = convertMarkdownToMrkdwn(this.textBuffer);
       const blocks = this.buildTextBlocks(converted, true);
-      result.textAction = {
-        type: 'update',
-        priority: 1,
-        channel: this.config.channel,
-        threadTs: this.config.threadTs,
-        messageTs: this.textMessageTs,
-        blocks,
-        text: this.textBuffer.slice(0, 100),
-        metadata: { messageType: 'text' },
-      };
+
+      if (this.textMessageTs) {
+        // Already posted — update with final content
+        result.textAction = {
+          type: 'update',
+          priority: 1,
+          channel: this.config.channel,
+          threadTs: this.config.threadTs,
+          messageTs: this.textMessageTs,
+          blocks,
+          text: this.textBuffer.slice(0, 100),
+          metadata: { messageType: 'text' },
+        };
+      } else {
+        // Never posted (was buffered) — post now as final text
+        result.textAction = {
+          type: 'postMessage',
+          priority: 1,
+          channel: this.config.channel,
+          threadTs: this.config.threadTs,
+          blocks,
+          text: this.textBuffer.slice(0, 100),
+          metadata: { messageType: 'text' },
+        };
+      }
     }
 
     result.resultEvent = event;

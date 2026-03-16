@@ -175,7 +175,7 @@ export type BundleAction =
   | { type: 'collapse'; bundleId: string; bundleIndex: number; messageTs: string; blocks: Block[]; text: string; sessionId?: string };
 
 export interface ProcessedActions {
-  groupActions: GroupAction[];
+  bundleActions: BundleAction[];
   textAction?: SlackAction;
   resultEvent?: any;
 }
