@@ -38,13 +38,14 @@
 - `buildBundleDetailModal`のシグネチャに`bundleIndex: number`を追加
 - thinkingエントリにボタンを追加（変更3のボタン形式に従う）
 - action_id: `view_thinking_detail:{sessionId}:{bundleIndex}:{thinkingIndex}`
-  - `thinkingIndex`はバンドル内のthinkingエントリの出現順インデックス
+  - `thinkingIndex`はバンドル内のthinkingエントリのみをフィルタした上での出現順インデックス（全エントリ中のインデックスではない）
 - `src/index.ts`に`view_thinking_detail`アクションハンドラを追加:
   1. action_idからsessionId, bundleIndex, thinkingIndexをパース
   2. `sessionJsonlReader.readBundle()`で該当バンドルを取得
-  3. バンドル内のthinkingエントリをthinkingIndexで特定
+  3. バンドル内のエントリから`type === 'thinking'`のみをフィルタし、thinkingIndexで特定
   4. `buildThinkingModal(entry.texts)`で第二層モーダルを生成
   5. `views.push`で表示
+- `index.ts`内の既存`view_bundle`ハンドラ（`buildBundleDetailModal`の呼び出し元）にも`bundleIndex`を渡すように変更
 
 ## 変更3: BundleDetailモーダルのエントリをボタン化
 
@@ -57,13 +58,16 @@
 `buildBundleDetailModal`で、各エントリをsection+accessoryからactionsブロック内のボタンに変更:
 
 - 思考: `💭 思考を表示する...` → action_id: `view_thinking_detail:{sessionId}:{bundleIndex}:{thinkingIndex}`
-- ツール: `🔧 Read src/index.ts (1.2s)` → action_id: `view_tool_detail:{sessionId}:{toolUseId}`
-- SubAgent: `🤖 SubAgent: "探索" (3.5s)` → action_id: `view_subagent_detail:{sessionId}:{toolUseId}`
+- ツール: `🔧 {toolName} {oneLiner} ({duration})` → action_id: `view_tool_detail:{sessionId}:{toolUseId}`
+- SubAgent: `🤖 SubAgent: "{description}" ({duration})` → action_id: `view_subagent_detail:{sessionId}:{toolUseId}`
+
+ボタンテキストの組み立て: アイコン + ツール名/説明 + oneLiner + duration。全体を`truncate(text, 75)`で切り詰める。
 
 ### 制約
 
-- ボタンテキストは最大75文字。超える場合はtruncate
+- ボタンテキストは最大75文字。全体組み立て後にtruncate適用
 - actionsブロックは最大25要素。超える場合は複数actionsブロックに分割
+- 各エントリは1つのボタン。actionsブロック間にdividerは不要（ボタンが自然に区切られるため）
 
 ## 変更4: ✅リアクションの永続化
 
@@ -73,12 +77,14 @@
 
 ### 変更内容
 
-- `ReactionManager`に前回の✅情報（channel, ts）を保持するフィールドを追加
-- `replaceWithDone`からsetTimeoutによる自動削除を撤去
-- `markProcessing`（新しいメッセージの処理開始時）で:
-  1. 前回の✅を削除
-  2. 🧠を付与
-  3. 新しいメッセージのtsを記録
+- `ReactionManager`に前回の✅情報を保持する`lastDone: { channel: string; ts: string } | null`フィールドを追加
+  - DMは1ユーザー1チャンネルなのでグローバルに1つで十分
+- `replaceWithDone`からsetTimeoutによる自動削除を撤去し、`lastDone`に情報を保存
+- 既存の`replaceWithProcessing`メソッドの先頭に前回✅の削除ロジックを追加:
+  1. `lastDone`がnullでなければ、`safeRemove(lastDone.channel, lastDone.ts, 'white_check_mark')`
+  2. `lastDone = null`
+  3. 既存の🧠付与ロジックを実行
+- 新規メソッドの追加は不要（既存の`replaceWithProcessing`を拡張）
 
 ## 変更5: 🔴中断をactiveMessageTsベースに変更
 
@@ -88,13 +94,13 @@
 
 ### 変更内容
 
-- `reaction_added`ハンドラで`item.ts`を`activeMessageTs`マップの値と照合
-- マッチしたセッションに`interrupt`制御メッセージを送信
-- `sessionIndexStore.findByThreadTs`ベースの検索は削除
-- `activeMessageTs`はindex.ts内のローカル変数なので、ハンドラからアクセス可能
+- `reaction_added`ハンドラで`item.ts`を`activeMessageTs`マップの値と照合（Mapをイテレートして値が一致するエントリを探す）
+- マッチしたセッションIDでcoordinatorからセッションを取得し、`interrupt`制御メッセージを送信
+- `sessionIndexStore.findByThreadTs`ベースの検索は削除（ユーザー要件: activeMessageTsマッチのみ）
+- `activeMessageTs`はindex.ts内の`main()`スコープのローカル変数で、`reaction_added`ハンドラと同スコープなのでアクセス可能
 
 ## 対象ファイル
 
 - `src/slack/modal-builder.ts` — 変更1, 2, 3
 - `src/slack/reaction-manager.ts` — 変更4
-- `src/index.ts` — 変更2 (ハンドラ追加), 4 (markProcessing呼び出し変更), 5 (reaction_addedハンドラ変更)
+- `src/index.ts` — 変更2 (view_thinking_detailハンドラ追加, view_bundleハンドラでbundleIndex渡し), 5 (reaction_addedハンドラ変更)
