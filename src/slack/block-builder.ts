@@ -4,7 +4,7 @@ function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-function getTimeAgo(date: Date): string {
+export function getTimeAgo(date: Date): string {
   const diffMs = Date.now() - date.getTime();
   const diffMin = Math.floor(diffMs / 60_000);
   if (diffMin < 1) return 'just now';
@@ -105,37 +105,23 @@ export function buildResultBlocks(params: ResultBlocksParams): Block[] {
   return blocks;
 }
 
-export interface HomeTabV2Params {
+export interface HomeTabParams {
+  isActive: boolean;
   model: string;
   directoryId: string;
   directories: Array<{ id: string; name: string; path: string }>;
-  activeSessions: Array<{
-    cliSessionId: string;
-    name: string;
-    lastActiveAt: string;
-    model: string;
-    status: 'active';
-    threadTs: string;
-    channelId: string;
+  recentSessions: Array<{
+    timeAgo: string;
+    firstPromptPreview: string;
+    projectPath: string;
   }>;
-  endedSessions: Array<{
-    cliSessionId: string;
-    name: string;
-    lastActiveAt: string;
-    model: string;
-    status: 'ended';
-    threadTs: string;
-    channelId: string;
-  }>;
-  page: number;
-  totalPages: number;
 }
 
-export function buildHomeTabBlocks(params: HomeTabV2Params): Block[] {
-  const { model, directoryId, directories, activeSessions, endedSessions, page, totalPages } = params;
+export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
+  const { isActive, model, directoryId, directories, recentSessions } = params;
 
-  const dirEntry = directories.find(d => d.id === directoryId);
-  const dirName = dirEntry?.name ?? directoryId;
+  const statusEmoji = isActive ? '🟢' : '🔴';
+  const statusText = isActive ? 'Active' : 'Inactive';
 
   const blocks: Block[] = [
     // 1. Header
@@ -143,157 +129,80 @@ export function buildHomeTabBlocks(params: HomeTabV2Params): Block[] {
       type: 'header',
       text: { type: 'plain_text', text: 'Claude Code Bridge' },
     },
-    // 2. Status bar
+    // 2. Status indicator
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: `${statusEmoji} *${statusText}*` },
+    },
+    // 3. Dropdown labels (spacing is approximate — adjust during manual verification)
     {
       type: 'context',
       elements: [
+        { type: 'mrkdwn', text: '          *MODEL*                                              *DIRECTORY*' },
+      ],
+    },
+    // 4. Dropdowns side-by-side
+    {
+      type: 'actions',
+      elements: [
         {
-          type: 'mrkdwn',
-          text: `🟢 Bridge Running | Model: ${capitalize(model)} | Dir: ${dirName}`,
+          type: 'static_select',
+          action_id: 'home_set_default_model',
+          initial_option: {
+            text: { type: 'plain_text', text: capitalize(model) },
+            value: model,
+          },
+          options: [
+            { text: { type: 'plain_text', text: 'Opus' }, value: 'opus' },
+            { text: { type: 'plain_text', text: 'Sonnet' }, value: 'sonnet' },
+            { text: { type: 'plain_text', text: 'Haiku' }, value: 'haiku' },
+          ],
+        },
+        {
+          type: 'static_select',
+          action_id: 'home_set_directory',
+          ...(directoryId && directories.find(d => d.id === directoryId) ? {
+            initial_option: {
+              text: { type: 'plain_text', text: directories.find(d => d.id === directoryId)!.name },
+              value: directoryId,
+            },
+          } : {}),
+          options: directories.length > 0
+            ? directories.map(d => ({
+                text: { type: 'plain_text', text: d.name || d.id },
+                value: d.id,
+              }))
+            : [{ text: { type: 'plain_text', text: '~' }, value: 'home' }],
         },
       ],
     },
-    // 3. Divider
+    // 5. Divider
     { type: 'divider' },
-    // 4. Model setting
+    // 6. Recent Sessions header
     {
       type: 'section',
-      text: { type: 'mrkdwn', text: '*Default Model*' },
-      accessory: {
-        type: 'static_select',
-        action_id: 'home_set_default_model',
-        initial_option: {
-          text: { type: 'plain_text', text: capitalize(model) },
-          value: model,
-        },
-        options: [
-          { text: { type: 'plain_text', text: 'Opus' }, value: 'opus' },
-          { text: { type: 'plain_text', text: 'Sonnet' }, value: 'sonnet' },
-          { text: { type: 'plain_text', text: 'Haiku' }, value: 'haiku' },
-        ],
-      },
-    },
-    // 5. Directory setting (only show if there are directories)
-    ...(directories.length > 0 ? [{
-      type: 'section' as const,
-      text: { type: 'mrkdwn' as const, text: '*Working Directory*' },
-      accessory: {
-        type: 'static_select' as const,
-        action_id: 'home_set_directory',
-        ...(directoryId && dirEntry ? {
-          initial_option: {
-            text: { type: 'plain_text' as const, text: dirEntry.name || directoryId },
-            value: directoryId,
-          },
-        } : {}),
-        options: directories.map(d => ({
-          text: { type: 'plain_text' as const, text: d.name || d.id },
-          value: d.id,
-        })),
-      },
-    }] : []),
-    // 6. Divider
-    { type: 'divider' },
-    // 7. Usage Guide
-    {
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: '*Usage Guide*\n1. Select a model and directory above\n2. Send a DM to this bot to start a session\n3. Use threads to continue conversations\n4. Use `/claude` slash command for quick tasks',
-      },
-    },
-    // 8. Divider
-    { type: 'divider' },
-    // 9. Active Sessions header
-    {
-      type: 'section',
-      text: { type: 'mrkdwn', text: `*Active Sessions* (${activeSessions.length})` },
+      text: { type: 'mrkdwn', text: '*Recent Sessions*' },
     },
   ];
 
-  // Active session list
-  if (activeSessions.length === 0) {
+  // 7. Recent session entries
+  if (recentSessions.length === 0) {
     blocks.push({
-      type: 'section',
-      text: { type: 'mrkdwn', text: '_No active sessions_' },
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: '_No recent sessions_' }],
     });
   } else {
-    for (const s of activeSessions) {
-      const ago = getTimeAgo(new Date(s.lastActiveAt));
-      blocks.push({
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: `:large_green_circle: *${s.name}*\nModel: ${capitalize(s.model)} | Last active: ${ago}`,
-        },
-        accessory: {
-          type: 'button',
-          text: { type: 'plain_text', text: 'Open' },
-          action_id: 'open_session',
-          value: s.cliSessionId,
-        },
-      });
-    }
-  }
-
-  // 10. Divider
-  blocks.push({ type: 'divider' });
-
-  // 11. Recent (Ended) sessions header
-  blocks.push({
-    type: 'section',
-    text: { type: 'mrkdwn', text: `*Recent Sessions* (${endedSessions.length})` },
-  });
-
-  if (endedSessions.length === 0) {
-    blocks.push({
-      type: 'section',
-      text: { type: 'mrkdwn', text: '_No recent sessions_' },
-    });
-  } else {
-    for (const s of endedSessions) {
-      const ago = getTimeAgo(new Date(s.lastActiveAt));
+    for (const s of recentSessions) {
       blocks.push({
         type: 'context',
         elements: [
           {
             type: 'mrkdwn',
-            text: `:white_circle: *${s.name}* | ${capitalize(s.model)} | ${ago}`,
+            text: `${s.timeAgo} — ${s.firstPromptPreview}\n${s.projectPath}`,
           },
         ],
       });
     }
-  }
-
-  // 12. Pagination
-  if (totalPages > 1) {
-    const paginationElements: Block[] = [];
-    if (page > 0) {
-      paginationElements.push({
-        type: 'button',
-        text: { type: 'plain_text', text: '← Prev' },
-        action_id: 'session_page_prev',
-        value: String(page - 1),
-      });
-    }
-    paginationElements.push({
-      type: 'button',
-      text: { type: 'plain_text', text: `Page ${page + 1}/${totalPages}` },
-      action_id: 'session_page_noop',
-      value: String(page),
-    });
-    if (page < totalPages - 1) {
-      paginationElements.push({
-        type: 'button',
-        text: { type: 'plain_text', text: 'Next →' },
-        action_id: 'session_page_next',
-        value: String(page + 1),
-      });
-    }
-    blocks.push({
-      type: 'actions',
-      elements: paginationElements,
-    });
   }
 
   return blocks;
@@ -311,16 +220,16 @@ function formatDuration(ms: number): string {
 export function buildResponseFooter(params: {
   inputTokens: number;
   outputTokens: number;
-  contextTokens: number;
+  contextUsed: number;
   contextWindow: number;
   model: string;
   durationMs: number;
 }): any[] {
-  const ctxPct = (params.contextTokens / params.contextWindow) * 100;
+  const ctxPct = (params.contextUsed / params.contextWindow) * 100;
   const ctxWindowLabel = params.contextWindow >= 1_000_000
     ? `${(params.contextWindow / 1_000_000).toFixed(0)}M`
     : `${(params.contextWindow / 1_000).toFixed(0)}k`;
-  const text = `tokens in:${formatTokens(params.inputTokens)} out:${formatTokens(params.outputTokens)} | ctx ${formatTokens(params.contextTokens)}/${ctxWindowLabel}(${ctxPct.toFixed(1)}%) | ${params.model} | ${formatDuration(params.durationMs)}`;
+  const text = `tokens in:${formatTokens(params.inputTokens)} out:${formatTokens(params.outputTokens)} | ctx ${formatTokens(params.contextUsed)}/${ctxWindowLabel}(${ctxPct.toFixed(1)}%) | ${params.model} | ${formatDuration(params.durationMs)}`;
   return [{
     type: 'context',
     elements: [{ type: 'mrkdwn', text }],
