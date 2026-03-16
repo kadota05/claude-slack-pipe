@@ -99,4 +99,36 @@ describe('SessionJsonlReader.readBundle', () => {
     const entries = await reader.readBundle('/test/project', 'sess-1', 5);
     expect(entries).toHaveLength(0);
   });
+
+  it('ignores user text blocks as bundle boundaries', async () => {
+    writeJsonl('/test/project', 'sess-1', [
+      // User message with text block — should NOT count as bundle boundary
+      { message: { role: 'user', content: [{ type: 'text', text: 'Hello, please help' }] } },
+      // Assistant thinking + tool
+      { message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'Let me check' }] } },
+      { message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_001', name: 'Read', input: { file_path: '/a.ts' } }] } },
+      { message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_001', content: 'file content' }] } },
+      // Assistant text — THIS is the bundle boundary
+      { message: { role: 'assistant', content: [{ type: 'text', text: 'Here is the result' }] } },
+    ]);
+
+    const entries = await reader.readBundle('/test/project', 'sess-1', 0);
+    expect(entries).toHaveLength(2); // thinking + tool
+    expect(entries[0].type).toBe('thinking');
+    expect(entries[1].type).toBe('tool');
+  });
+
+  it('skips child events with parentToolUseID (camelCase)', async () => {
+    writeJsonl('/test/project', 'sess-1', [
+      { message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_agent', name: 'Agent', input: { description: 'explore' } }] } },
+      // Child event with camelCase parentToolUseID — should be skipped
+      { parentToolUseID: 'toolu_agent', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_child', name: 'Read', input: { file_path: '/b.ts' } }] } },
+      { message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_agent', content: 'agentId: abc123\ndone' }] } },
+      { message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } },
+    ]);
+
+    const entries = await reader.readBundle('/test/project', 'sess-1', 0);
+    expect(entries).toHaveLength(1); // Only subagent, child skipped
+    expect(entries[0].type).toBe('subagent');
+  });
 });

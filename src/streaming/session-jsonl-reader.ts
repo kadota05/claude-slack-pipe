@@ -95,17 +95,20 @@ export class SessionJsonlReader {
       if (!msg || !Array.isArray(msg.content)) continue;
 
       // Skip child events (subagent inner messages)
-      const isChild = typeof entry.parent_tool_use_id === 'string';
+      // JSONL uses camelCase "parentToolUseID", stream events use snake_case "parent_tool_use_id"
+      const isChild = typeof entry.parentToolUseID === 'string'
+        || typeof entry.parent_tool_use_id === 'string';
       if (isChild) continue;
 
+      const role = msg.role;
       const isCollecting = textBlockCount === bundleIndex;
 
       for (const block of msg.content) {
         if (!block || typeof block !== 'object') continue;
 
-        if (block.type === 'text') {
-          // A top-level text block increments the counter
-          // If we were collecting, stop; if we haven't reached bundleIndex yet, increment
+        if (block.type === 'text' && role === 'assistant') {
+          // Only assistant text blocks mark bundle boundaries
+          // User text blocks (the initial prompt) should be ignored
           textBlockCount++;
           continue;
         }
