@@ -173,23 +173,25 @@ export function buildHomeTabBlocks(params: HomeTabV2Params): Block[] {
         ],
       },
     },
-    // 5. Directory setting
-    {
-      type: 'section',
-      text: { type: 'mrkdwn', text: '*Working Directory*' },
+    // 5. Directory setting (only show if there are directories)
+    ...(directories.length > 0 ? [{
+      type: 'section' as const,
+      text: { type: 'mrkdwn' as const, text: '*Working Directory*' },
       accessory: {
-        type: 'static_select',
+        type: 'static_select' as const,
         action_id: 'home_set_directory',
-        initial_option: {
-          text: { type: 'plain_text', text: dirName },
-          value: directoryId,
-        },
+        ...(directoryId && dirEntry ? {
+          initial_option: {
+            text: { type: 'plain_text' as const, text: dirEntry.name || directoryId },
+            value: directoryId,
+          },
+        } : {}),
         options: directories.map(d => ({
-          text: { type: 'plain_text', text: d.name },
+          text: { type: 'plain_text' as const, text: d.name || d.id },
           value: d.id,
         })),
       },
-    },
+    }] : []),
     // 6. Divider
     { type: 'divider' },
     // 7. Usage Guide
