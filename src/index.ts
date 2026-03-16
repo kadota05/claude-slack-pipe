@@ -26,6 +26,8 @@ import type { BundleAction } from './streaming/types.js';
 import { SerialActionQueue } from './streaming/serial-action-queue.js';
 import { SessionJsonlReader } from './streaming/session-jsonl-reader.js';
 import { SubagentJsonlReader } from './streaming/subagent-jsonl-reader.js';
+import { Heartbeat } from './heartbeat.js';
+import { RecentSessionScanner } from './store/recent-session-scanner.js';
 
 function waitForIdle(session: PersistentSession, timeoutMs = 300000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -52,12 +54,17 @@ async function main(): Promise<void> {
   // Singleton lock — prevent duplicate instances
   const pidLock = acquirePidLock(config.dataDir);
 
+  const heartbeat = new Heartbeat(config.dataDir);
+  heartbeat.start();
+
   const app = createApp(config);
 
   // Initialize stores
   const projectStore = new ProjectStore(config.claudeProjectsDir);
   const userPrefStore = new UserPreferenceStore(config.dataDir);
   const sessionIndexStore = new SessionIndexStore(config.dataDir);
+
+  const recentSessionScanner = new RecentSessionScanner(config.claudeProjectsDir);
 
   // Initialize process coordination
   const coordinator = new SessionCoordinator({
@@ -77,7 +84,7 @@ async function main(): Promise<void> {
   const reactionManager = new ReactionManager(app.client);
   const errorHandler = new ErrorDisplayHandler(app.client);
   const bridgeCommands = new BridgeCommandHandler(app.client);
-  const homeTabHandler = new HomeTabHandler(app.client, userPrefStore, sessionIndexStore, projectStore);
+  const homeTabHandler = new HomeTabHandler(app.client, userPrefStore, projectStore, heartbeat, recentSessionScanner);
   const actionHandler = new ActionHandler(userPrefStore, coordinator, homeTabHandler);
 
   // --- Message Handler ---
@@ -403,7 +410,10 @@ async function main(): Promise<void> {
               + (usage.cache_creation_input_tokens || 0);
 
             const sessionModel = indexStore.findByThreadTs(threadTs)?.model || '';
-            const contextWindow = sessionModel.includes('haiku') ? 200_000 : 1_000_000;
+            const modelUsageEntry = resultEvent.modelUsage
+              && Object.values(resultEvent.modelUsage)[0];
+            const contextWindow = modelUsageEntry?.contextWindow
+              || (sessionModel.includes('haiku') ? 200_000 : 1_000_000);
 
             const footerBlocks = buildResponseFooter({
               inputTokens: usage.input_tokens || 0,
@@ -502,33 +512,8 @@ async function main(): Promise<void> {
     }
   });
 
-  app.action('open_session', async ({ ack, body }: any) => {
-    await ack();
-    const sessionId = body.actions[0]?.value;
-    if (sessionId) {
-      const entry = sessionIndexStore.get(sessionId);
-      if (entry) {
-        await app.client.chat.postEphemeral({
-          channel: entry.channelId,
-          user: body.user.id,
-          text: `Open the thread at <#${entry.channelId}> to continue session "${entry.name}"`,
-        });
-      }
-    }
-  });
 
-  app.action('session_page_prev', async ({ ack, body }: any) => {
-    await ack();
-    // Parse page from value, publish updated home tab
-    const page = Math.max(0, parseInt(body.actions[0]?.value || '0', 10));
-    await homeTabHandler.publishHomeTab(body.user.id, page);
-  });
 
-  app.action('session_page_next', async ({ ack, body }: any) => {
-    await ack();
-    const page = parseInt(body.actions[0]?.value || '0', 10);
-    await homeTabHandler.publishHomeTab(body.user.id, page);
-  });
 
   // --- Permission Prompt Actions ---
 
@@ -733,6 +718,7 @@ async function main(): Promise<void> {
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info(`Received ${signal}, shutting down...`);
+    heartbeat.stop();
     // End all alive sessions
     for (const entry of sessionIndexStore.getActive()) {
       coordinator.endSession(entry.cliSessionId);
