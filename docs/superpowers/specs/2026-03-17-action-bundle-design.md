@@ -212,7 +212,7 @@ action_id: view_bundle:{sessionId}:{bundleIndex}
 ### SessionJsonlReader拡張
 
 ```typescript
-readBundle(sessionId: string, bundleIndex: number): Promise<BundleEntry[]>
+readBundle(projectPath: string, sessionId: string, bundleIndex: number): Promise<BundleEntry[]>
 
 BundleEntry =
   | { type: 'thinking'; texts: string[] }
