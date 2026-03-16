@@ -1,5 +1,6 @@
 // src/slack/modal-builder.ts
 import type { Block } from '../streaming/types.js';
+import type { SubagentConversationFlow } from '../streaming/subagent-jsonl-reader.js';
 
 interface ToolModalConfig {
   toolId: string;
@@ -122,6 +123,84 @@ export function buildToolGroupModal(tools: ToolGroupModalItem[]): any {
   return {
     type: 'modal',
     title: { type: 'plain_text', text: 'ツール実行詳細' },
+    close: { type: 'plain_text', text: '閉じる' },
+    blocks: blocks.slice(0, 100),
+  };
+}
+
+export function buildSubagentModal(
+  description: string,
+  flow: SubagentConversationFlow | null,
+): any {
+  const blocks: Block[] = [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: truncate(`SubAgent: ${description}`, 24) },
+    },
+  ];
+
+  if (!flow) {
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: 'SubAgent詳細を取得できませんでした。' },
+    });
+    return {
+      type: 'modal',
+      title: { type: 'plain_text', text: 'SubAgent詳細' },
+      close: { type: 'plain_text', text: '閉じる' },
+      blocks,
+    };
+  }
+
+  blocks.push({
+    type: 'section',
+    text: { type: 'mrkdwn', text: `*プロンプト:*\n_${flow.systemPromptSummary}_` },
+  });
+  blocks.push({ type: 'divider' });
+
+  for (const step of flow.steps) {
+    if (step.type === 'tool_use' && step.toolName) {
+      const sectionBlock: Block = {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `:wrench: \`${step.toolName}\` ${step.oneLiner || ''}`,
+        },
+      };
+      if (step.toolUseId) {
+        sectionBlock.accessory = {
+          type: 'button',
+          text: { type: 'plain_text', text: '詳細' },
+          action_id: `view_tool_detail:${step.toolUseId}`,
+        };
+      }
+      blocks.push(sectionBlock);
+    } else if (step.type === 'tool_result') {
+      const icon = step.isError ? ':x:' : ':white_check_mark:';
+      blocks.push({
+        type: 'context',
+        elements: [{ type: 'mrkdwn', text: `${icon} ${step.resultSummary || '完了'}` }],
+      });
+    }
+  }
+
+  blocks.push({ type: 'divider' });
+  blocks.push({
+    type: 'section',
+    text: { type: 'mrkdwn', text: `*最終結果:*` },
+  });
+
+  const resultParts = splitContent(flow.finalResult, 2900);
+  for (const part of resultParts) {
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: part },
+    });
+  }
+
+  return {
+    type: 'modal',
+    title: { type: 'plain_text', text: 'SubAgent詳細' },
     close: { type: 'plain_text', text: '閉じる' },
     blocks: blocks.slice(0, 100),
   };

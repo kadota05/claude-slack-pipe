@@ -1,6 +1,6 @@
 // tests/slack/modal-builder.test.ts
 import { describe, it, expect } from 'vitest';
-import { buildToolModal, buildThinkingModal, buildToolGroupModal } from '../../src/slack/modal-builder.js';
+import { buildToolModal, buildThinkingModal, buildToolGroupModal, buildSubagentModal } from '../../src/slack/modal-builder.js';
 
 describe('buildToolModal', () => {
   it('builds modal for Read tool', () => {
@@ -125,5 +125,34 @@ describe('buildToolGroupModal', () => {
     ]);
     const allText = JSON.stringify(modal.blocks);
     expect(allText).toContain(':x:');
+  });
+});
+
+describe('buildSubagentModal', () => {
+  it('displays conversation flow from JSONL', () => {
+    const flow = {
+      agentType: 'general-purpose',
+      systemPromptSummary: 'You are a search agent...',
+      steps: [
+        { type: 'text' as const, text: 'I will search.' },
+        { type: 'tool_use' as const, toolName: 'Grep', toolUseId: 'toolu_001', oneLiner: 'auth' },
+        { type: 'tool_result' as const, toolUseId: 'toolu_001', resultSummary: '5 matches', isError: false },
+      ],
+      finalResult: 'Found auth in 5 files.',
+      totalDurationMs: 5000,
+    };
+
+    const modal = buildSubagentModal('コード探索', flow);
+    expect(modal.type).toBe('modal');
+    const allText = JSON.stringify(modal.blocks);
+    expect(allText).toContain('search agent');
+    expect(allText).toContain('Grep');
+    expect(allText).toContain('Found auth');
+  });
+
+  it('displays fallback when flow is null', () => {
+    const modal = buildSubagentModal('コード探索', null);
+    const allText = JSON.stringify(modal.blocks);
+    expect(allText).toContain('取得できませんでした');
   });
 });
