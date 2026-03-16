@@ -21,52 +21,10 @@ export interface SessionMetadata {
 }
 
 // ============================================================
-// 5.3 Stream Processing (Phase 2, stubs only for MVP)
+// 5.3 Stream Processing (see src/streaming/types.ts)
 // ============================================================
 
-export type ProcessingPhase =
-  | 'idle'
-  | 'thinking'
-  | 'tool_input'
-  | 'tool_running'
-  | 'sub_agent'
-  | 'completed'
-  | 'error';
-
-export interface StreamProcessorState {
-  phase: ProcessingPhase;
-  progressMessageTs: string | null;
-  steps: ToolUseStep[];
-  currentText: string;
-  currentToolUse: {
-    id: string;
-    name: string;
-    inputJson: string;
-  } | null;
-  subAgentSteps: Map<string, ToolUseStep[]>;
-  startTime: number;
-  lastThinkingSnippet: string;
-}
-
-export interface ToolUseStep {
-  index: number;
-  toolName: string;
-  toolUseId: string;
-  input: Record<string, unknown>;
-  output?: Record<string, unknown>;
-  error?: string;
-  status: 'running' | 'completed' | 'error';
-  startTime: number;
-  endTime?: number;
-  parentToolUseId: string | null;
-}
-
-export interface ToolUseSummary {
-  toolName: string;
-  status: 'running' | 'completed' | 'error';
-  oneLiner: string;
-  detailBlocks: unknown[];
-}
+export type { StreamProcessorState, ToolUseTracker } from './streaming/types.js';
 
 // ============================================================
 // 5.4 Command Parser (see src/slack/command-parser.ts for ParsedCommand)
