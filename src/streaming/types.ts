@@ -155,6 +155,25 @@ export type GroupAction =
   | { type: 'update'; groupId: string; messageTs: string; blocks: Block[]; text: string; category: GroupCategory }
   | { type: 'collapse'; groupId: string; messageTs: string; blocks: Block[]; text: string; category: GroupCategory };
 
+export interface CompletedGroup {
+  category: GroupCategory;
+  // thinking
+  thinkingTexts?: string[];
+  // tool
+  tools?: GroupToolInfo[];
+  totalDuration?: number;
+  // subagent
+  agentDescription?: string;
+  agentId?: string;
+  agentSteps?: GroupStepInfo[];
+  duration?: number;
+}
+
+export type BundleAction =
+  | { type: 'postMessage'; bundleId: string; bundleIndex: number; blocks: Block[]; text: string }
+  | { type: 'update'; bundleId: string; bundleIndex: number; messageTs: string; blocks: Block[]; text: string }
+  | { type: 'collapse'; bundleId: string; bundleIndex: number; messageTs: string; blocks: Block[]; text: string; sessionId?: string };
+
 export interface ProcessedActions {
   groupActions: GroupAction[];
   textAction?: SlackAction;
