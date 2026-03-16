@@ -406,3 +406,51 @@ export interface SecurityConfig {
   allowedTeamIds: string[];
   adminUserIds: string[];
 }
+
+// ============================================================
+// Phase 2: Persistent Process Types
+// ============================================================
+
+export type SessionState = 'not_started' | 'starting' | 'idle' | 'processing' | 'ending' | 'dead';
+
+export interface SessionStartParams {
+  sessionId: string;
+  model: string;
+  projectPath: string;
+  budgetUsd: number;
+  isResume: boolean;
+}
+
+export interface ControlMessage {
+  type: 'control';
+  subtype: 'set_model' | 'interrupt' | 'can_use_tool' | 'keep_alive' | 'set_permission_mode';
+  [key: string]: unknown;
+}
+
+export interface StdinUserMessage {
+  type: 'user_message';
+  content: string;
+}
+
+export type StdinMessage = ControlMessage | StdinUserMessage;
+
+export interface StreamEvent {
+  type: 'assistant' | 'system' | 'user' | 'result';
+  subtype?: string;
+  [key: string]: unknown;
+}
+
+export interface ResultEvent extends StreamEvent {
+  type: 'result';
+  result?: string;
+  total_cost_usd?: number;
+  duration_ms?: number;
+  usage?: { input_tokens: number; output_tokens: number };
+  session_id?: string;
+}
+
+export interface SystemInitEvent extends StreamEvent {
+  type: 'system';
+  subtype: 'init';
+  session_id?: string;
+}
