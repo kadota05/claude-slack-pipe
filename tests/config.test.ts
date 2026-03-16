@@ -23,6 +23,7 @@ describe('config', () => {
     delete process.env.DEFAULT_BUDGET_USD;
     delete process.env.MAX_BUDGET_USD;
     delete process.env.LOG_LEVEL;
+    delete process.env.DATA_DIR;
   });
 
   it('should load config from env vars', async () => {
@@ -81,6 +82,23 @@ describe('config', () => {
     // No SLACK_BOT_TOKEN or SLACK_APP_TOKEN set
     const { loadConfig } = await import('../src/config.js');
     expect(() => loadConfig()).toThrow();
+  });
+
+  it('sets default dataDir to ~/.claude-slack-pipe/', async () => {
+    Object.assign(process.env, requiredEnv);
+
+    const { loadConfig } = await import('../src/config.js');
+    const config = loadConfig();
+    expect(config.dataDir).toMatch(/\.claude-slack-pipe/);
+  });
+
+  it('reads DATA_DIR from env', async () => {
+    Object.assign(process.env, requiredEnv);
+    process.env.DATA_DIR = '/tmp/test-data';
+
+    const { loadConfig } = await import('../src/config.js');
+    const config = loadConfig();
+    expect(config.dataDir).toBe('/tmp/test-data');
   });
 
   it('should throw on missing SLACK_APP_TOKEN', async () => {
