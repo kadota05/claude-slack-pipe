@@ -83,6 +83,13 @@ export class RecentSessionScanner {
 
   private async readFirstUserMessage(filePath: string): Promise<string | null> {
     return new Promise((resolve) => {
+      let resolved = false;
+      const done = (value: string | null) => {
+        if (resolved) return;
+        resolved = true;
+        resolve(value);
+      };
+
       try {
         const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
         const rl = readline.createInterface({ input: stream });
@@ -107,20 +114,20 @@ export class RecentSessionScanner {
                 text = textBlock?.text || null;
               }
               if (text) {
+                done(text.replace(/\n/g, ' ').trim());
                 rl.close();
                 stream.destroy();
-                resolve(text.replace(/\n/g, ' ').trim());
                 return;
               }
             }
           } catch { /* skip unparseable lines */ }
         });
 
-        rl.on('close', () => resolve(null));
-        rl.on('error', () => resolve(null));
-        stream.on('error', () => resolve(null));
+        rl.on('close', () => done(null));
+        rl.on('error', () => done(null));
+        stream.on('error', () => done(null));
       } catch {
-        resolve(null);
+        done(null);
       }
     });
   }

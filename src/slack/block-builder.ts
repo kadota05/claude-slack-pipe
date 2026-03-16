@@ -124,61 +124,51 @@ export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
   const statusText = isActive ? 'Active' : 'Inactive';
 
   const blocks: Block[] = [
-    // 1. Header
-    {
-      type: 'header',
-      text: { type: 'plain_text', text: 'Claude Code Bridge' },
-    },
-    // 2. Status indicator
+    // 1. Status indicator (serves as header)
     {
       type: 'section',
-      text: { type: 'mrkdwn', text: `${statusEmoji} *${statusText}*` },
+      text: { type: 'mrkdwn', text: `${statusEmoji} *Claude Code — ${statusText}*` },
     },
-    // 3. Dropdown labels (spacing is approximate — adjust during manual verification)
+    // 2. Model selector
     {
-      type: 'context',
-      elements: [
-        { type: 'mrkdwn', text: '          *MODEL*                                              *DIRECTORY*' },
-      ],
+      type: 'section',
+      text: { type: 'mrkdwn', text: '*Model*' },
+      accessory: {
+        type: 'static_select',
+        action_id: 'home_set_default_model',
+        initial_option: {
+          text: { type: 'plain_text', text: capitalize(model) },
+          value: model,
+        },
+        options: [
+          { text: { type: 'plain_text', text: 'Opus' }, value: 'opus' },
+          { text: { type: 'plain_text', text: 'Sonnet' }, value: 'sonnet' },
+          { text: { type: 'plain_text', text: 'Haiku' }, value: 'haiku' },
+        ],
+      },
     },
-    // 4. Dropdowns side-by-side
-    {
-      type: 'actions',
-      elements: [
-        {
-          type: 'static_select',
-          action_id: 'home_set_default_model',
+    // 3. Directory selector
+    ...(directories.length > 0 ? [{
+      type: 'section' as const,
+      text: { type: 'mrkdwn' as const, text: '*Directory*' },
+      accessory: {
+        type: 'static_select' as const,
+        action_id: 'home_set_directory',
+        ...(directoryId && directories.find(d => d.id === directoryId) ? {
           initial_option: {
-            text: { type: 'plain_text', text: capitalize(model) },
-            value: model,
+            text: { type: 'plain_text' as const, text: directories.find(d => d.id === directoryId)!.name },
+            value: directoryId,
           },
-          options: [
-            { text: { type: 'plain_text', text: 'Opus' }, value: 'opus' },
-            { text: { type: 'plain_text', text: 'Sonnet' }, value: 'sonnet' },
-            { text: { type: 'plain_text', text: 'Haiku' }, value: 'haiku' },
-          ],
-        },
-        {
-          type: 'static_select',
-          action_id: 'home_set_directory',
-          ...(directoryId && directories.find(d => d.id === directoryId) ? {
-            initial_option: {
-              text: { type: 'plain_text', text: directories.find(d => d.id === directoryId)!.name },
-              value: directoryId,
-            },
-          } : {}),
-          options: directories.length > 0
-            ? directories.map(d => ({
-                text: { type: 'plain_text', text: d.name || d.id },
-                value: d.id,
-              }))
-            : [{ text: { type: 'plain_text', text: '~' }, value: 'home' }],
-        },
-      ],
-    },
-    // 5. Divider
+        } : {}),
+        options: directories.map(d => ({
+          text: { type: 'plain_text' as const, text: d.name || d.id },
+          value: d.id,
+        })),
+      },
+    }] : []),
+    // 4. Divider
     { type: 'divider' },
-    // 6. Recent Sessions header
+    // 5. Recent Sessions header
     {
       type: 'section',
       text: { type: 'mrkdwn', text: '*Recent Sessions*' },
