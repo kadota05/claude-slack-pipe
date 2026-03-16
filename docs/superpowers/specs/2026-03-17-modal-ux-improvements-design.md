@@ -35,7 +35,7 @@
 
 ### 変更内容
 
-- `buildBundleDetailModal`のシグネチャに`bundleIndex: number`を追加
+- `buildBundleDetailModal`のシグネチャを`(entries: BundleEntry[], sessionId: string, bundleIndex: number)`に変更
 - thinkingエントリにボタンを追加（変更3のボタン形式に従う）
 - action_id: `view_thinking_detail:{sessionId}:{bundleIndex}:{thinkingIndex}`
   - `thinkingIndex`はバンドル内のthinkingエントリのみをフィルタした上での出現順インデックス（全エントリ中のインデックスではない）
@@ -44,7 +44,7 @@
   2. `sessionJsonlReader.readBundle()`で該当バンドルを取得
   3. バンドル内のエントリから`type === 'thinking'`のみをフィルタし、thinkingIndexで特定
   4. `buildThinkingModal(entry.texts)`で第二層モーダルを生成
-  5. `views.push`で表示
+  5. `views.push`で表示（このアクションは常にBundleDetailモーダル内のボタンから発火するため、常に`views.push`。`views.open`との分岐は不要）
 - `index.ts`内の既存`view_bundle`ハンドラ（`buildBundleDetailModal`の呼び出し元）にも`bundleIndex`を渡すように変更
 
 ## 変更3: BundleDetailモーダルのエントリをボタン化
@@ -61,11 +61,11 @@
 - ツール: `🔧 {toolName} {oneLiner} ({duration})` → action_id: `view_tool_detail:{sessionId}:{toolUseId}`
 - SubAgent: `🤖 SubAgent: "{description}" ({duration})` → action_id: `view_subagent_detail:{sessionId}:{toolUseId}`
 
-ボタンテキストの組み立て: アイコン + ツール名/説明 + oneLiner + duration。全体を`truncate(text, 75)`で切り詰める。
+ボタンテキストの組み立て: アイコン + ツール名/説明 + oneLiner + duration。全体を`truncate(text, 72)`で切り詰める（既存の`truncate`関数は超過時に`...`(3文字)を付加するため、72+3=75文字でSlack APIの上限に収まる）。
 
 ### 制約
 
-- ボタンテキストは最大75文字。全体組み立て後にtruncate適用
+- ボタンテキスト（`plain_text`）はSlack API上限75文字。`truncate(text, 72)`で切り詰め
 - actionsブロックは最大25要素。超える場合は複数actionsブロックに分割
 - 各エントリは1つのボタン。actionsブロック間にdividerは不要（ボタンが自然に区切られるため）
 
