@@ -3,7 +3,7 @@ import { loadConfig } from './config.js';
 import { logger } from './utils/logger.js';
 import { AuthMiddleware } from './middleware/auth.js';
 import { RateLimiter } from './middleware/rate-limiter.js';
-import { ProjectStore } from './store/project-store.js';
+import { ProjectStore, decodeProjectId } from './store/project-store.js';
 import { UserPreferenceStore } from './store/user-preference-store.js';
 import { SessionIndexStore } from './store/session-index-store.js';
 import { SessionCoordinator } from './bridge/session-coordinator.js';
@@ -16,10 +16,26 @@ import { parseCommand } from './slack/command-parser.js';
 import { parsePermissionAction } from './slack/permission-prompt.js';
 import { sanitizeUserInput, sanitizeOutput } from './utils/sanitizer.js';
 import { buildResponseFooter, buildThreadHeaderText, buildStreamingBlocks } from './slack/block-builder.js';
+import fs from 'node:fs';
 import type { PersistentSession } from './bridge/persistent-session.js';
+
+function waitForIdle(session: PersistentSession, timeoutMs = 30000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (session.state === 'idle') { resolve(); return; }
+    const timer = setTimeout(() => reject(new Error('Session init timeout')), timeoutMs);
+    session.on('stateChange', (_from: string, to: string) => {
+      if (to === 'idle') { clearTimeout(timer); resolve(); }
+      if (to === 'dead') { clearTimeout(timer); reject(new Error('Session died during init')); }
+    });
+  });
+}
 
 async function main(): Promise<void> {
   const config = loadConfig();
+
+  // Ensure data directory exists
+  fs.mkdirSync(config.dataDir, { recursive: true });
+
   const app = createApp(config);
 
   // Initialize stores
@@ -145,7 +161,7 @@ async function main(): Promise<void> {
       const activeDir = prefs.activeDirectoryId
         ? projects.find((p) => p.id === prefs.activeDirectoryId)
         : projects[0];
-      const projectPath = activeDir?.projectPath || config.claudeProjectsDir;
+      const projectPath = activeDir ? decodeProjectId(activeDir.id) : process.cwd();
       const sessionId = crypto.randomUUID();
 
       session = await coordinator.getOrCreateSession({
@@ -206,6 +222,20 @@ async function main(): Promise<void> {
     // Wire message handler for this session (idempotent — check if already wired)
     wireSessionOutput(session, channelId, threadTs, reactionManager, app.client, sessionIndexStore);
 
+    // Wait for session to be ready
+    if (session.state === 'starting') {
+      try {
+        await waitForIdle(session);
+      } catch (err) {
+        await app.client.chat.postMessage({
+          channel: channelId,
+          thread_ts: threadTs,
+          text: `Failed to start session: ${(err as Error).message}`,
+        });
+        return;
+      }
+    }
+
     // Send prompt or queue
     if (session.state === 'idle') {
       await reactionManager.replaceWithProcessing(channelId, messageTs);
@@ -256,8 +286,12 @@ async function main(): Promise<void> {
     session.on('message', async (event: any) => {
       try {
         if (event.type === 'assistant') {
-          // Buffer text for streaming display
-          if (event.message?.content) {
+          // Handle content_block_delta for streaming text
+          if (event.subtype === 'content_block_delta' && event.delta?.type === 'text_delta') {
+            responseBuffer += event.delta.text;
+          }
+          // Handle full message (content_block_stop or final)
+          else if (event.message?.content) {
             for (const block of event.message.content) {
               if (block.type === 'text') {
                 responseBuffer += block.text;

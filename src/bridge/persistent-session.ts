@@ -106,6 +106,7 @@ export class PersistentSession extends EventEmitter {
       '--verbose',
       '--model', this.params.model,
       '--max-budget-usd', String(this.params.budgetUsd),
+      '--replay-user-messages',
     ];
 
     if (this.params.isResume) {

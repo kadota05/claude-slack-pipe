@@ -3,6 +3,13 @@ import path from 'node:path';
 import { logger } from '../utils/logger.js';
 import type { ProjectInfo, SessionInfoLight } from '../types.js';
 
+export function decodeProjectId(id: string): string {
+  // Claude CLI encodes CWD by replacing '/' with '-'
+  // e.g., -Users-alice-code-myapp -> /Users/alice/code/myapp
+  // This is lossy for directories with hyphens, but matches CLI behavior
+  return id.replace(/-/g, '/');
+}
+
 export class ProjectStore {
   private cache: ProjectInfo[] | null = null;
   private cacheTimestamp = 0;
