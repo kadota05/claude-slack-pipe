@@ -8,11 +8,14 @@ interface TextStreamUpdaterConfig {
   getUpdateUtilization: () => number;
 }
 
+const MAX_TIMER_TICKS_WITHOUT_TS = 20; // Stop timer after ~20 ticks without messageTs
+
 export class TextStreamUpdater {
   private textBuffer = '';
   private messageTs: string | null = null;
   private updateTimer: ReturnType<typeof setTimeout> | null = null;
   private dirty = false;
+  private ticksWithoutTs = 0;
   private readonly config: TextStreamUpdaterConfig;
 
   constructor(config: TextStreamUpdaterConfig) {
@@ -76,6 +79,7 @@ export class TextStreamUpdater {
   private scheduleNextUpdate(): void {
     this.updateTimer = setTimeout(() => {
       if (this.dirty && this.messageTs) {
+        this.ticksWithoutTs = 0;
         const converted = convertMarkdownToMrkdwn(this.textBuffer);
         this.config.onAction({
           type: 'update',
@@ -88,6 +92,13 @@ export class TextStreamUpdater {
           metadata: { messageType: 'text' },
         });
         this.dirty = false;
+      } else if (!this.messageTs) {
+        this.ticksWithoutTs++;
+        if (this.ticksWithoutTs >= MAX_TIMER_TICKS_WITHOUT_TS) {
+          // Safety: stop timer if messageTs was never set (e.g. postMessage failed)
+          this.stopUpdateTimer();
+          return;
+        }
       }
       // Reschedule with dynamically recalculated interval
       this.scheduleNextUpdate();

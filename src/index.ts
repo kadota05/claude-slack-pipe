@@ -337,8 +337,12 @@ async function main(): Promise<void> {
     wiredSessions.add(session.sessionId);
 
     // --- Streaming: StreamProcessor + Executor ---
-    const streamProcessor = new StreamProcessor({ channel: channelId, threadTs });
     const executor = new SlackActionExecutor(client);
+    const streamProcessor = new StreamProcessor({
+      channel: channelId,
+      threadTs,
+      getUpdateUtilization: () => executor.rateLimiter.getUtilization('update'),
+    });
 
     // Wire StreamProcessor actions to Slack executor
     streamProcessor.on('action', async (action: any) => {

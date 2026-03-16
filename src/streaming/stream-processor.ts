@@ -21,6 +21,7 @@ import type {
 interface StreamProcessorConfig {
   channel: string;
   threadTs: string;
+  getUpdateUtilization?: () => number;
 }
 
 export class StreamProcessor extends EventEmitter {
@@ -328,7 +329,7 @@ export class StreamProcessor extends EventEmitter {
           channel: this.config.channel,
           threadTs: this.config.threadTs,
           onAction: (action) => this.emitAction(action),
-          getUpdateUtilization: () => 0.3, // Phase 3 will use real rate limiter
+          getUpdateUtilization: this.config.getUpdateUtilization || (() => 0.3),
         });
         this.state.phase = 'responding';
       }
@@ -338,8 +339,10 @@ export class StreamProcessor extends EventEmitter {
         this.textUpdater.appendText(event.delta.text);
       }
     } else if (event.type === 'content_block_stop') {
-      // Block stopped — if text was streaming, finalize
-      // Note: content_block_stop doesn't identify which block, but we finalize text if active
+      // Block stopped — finalize text if active (removes typing indicator)
+      if (this.textUpdater) {
+        this.textUpdater.finalize();
+      }
     }
   }
 
