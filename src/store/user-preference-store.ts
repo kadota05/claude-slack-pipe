@@ -5,7 +5,7 @@ import { logger } from '../utils/logger.js';
 import type { UserPreferences, UserPreferenceFile } from '../types.js';
 
 const FILE_NAME = 'user-preferences.json';
-const DEFAULT_PREFS: UserPreferences = { defaultModel: 'sonnet', activeDirectoryId: null };
+const DEFAULT_PREFS: UserPreferences = { defaultModel: 'opus', activeDirectoryId: null };
 
 export class UserPreferenceStore {
   private readonly filePath: string;
