@@ -311,11 +311,16 @@ function formatDuration(ms: number): string {
 export function buildResponseFooter(params: {
   inputTokens: number;
   outputTokens: number;
-  costUsd: number;
+  contextTokens: number;
+  contextWindow: number;
   model: string;
   durationMs: number;
 }): any[] {
-  const text = `📊 ${formatTokens(params.inputTokens)}→${formatTokens(params.outputTokens)} tokens | $${params.costUsd.toFixed(3)} | ${params.model} | ${formatDuration(params.durationMs)}`;
+  const ctxPct = (params.contextTokens / params.contextWindow) * 100;
+  const ctxWindowLabel = params.contextWindow >= 1_000_000
+    ? `${(params.contextWindow / 1_000_000).toFixed(0)}M`
+    : `${(params.contextWindow / 1_000).toFixed(0)}k`;
+  const text = `tokens in:${formatTokens(params.inputTokens)} out:${formatTokens(params.outputTokens)} | ctx ${formatTokens(params.contextTokens)}/${ctxWindowLabel}(${ctxPct.toFixed(1)}%) | ${params.model} | ${formatDuration(params.durationMs)}`;
   return [{
     type: 'context',
     elements: [{ type: 'mrkdwn', text }],
@@ -327,7 +332,7 @@ export function buildThreadHeaderText(params: {
   model: string;
   sessionId: string;
 }): string {
-  return `📋 Session Started\n📁 ${params.projectPath}\nModel: ${params.model} | Session: ${params.sessionId}`;
+  return `*Session Started*\nDir: \`${params.projectPath}\`\nID: \`${params.sessionId}\``;
 }
 
 export function buildStreamingBlocks(params: {

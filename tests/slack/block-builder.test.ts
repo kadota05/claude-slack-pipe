@@ -48,42 +48,46 @@ describe('buildResultBlocks', () => {
 });
 
 describe('buildResponseFooter', () => {
-  it('formats cost, tokens, model, and duration', () => {
+  it('formats tokens, context, model, and duration', () => {
     const blocks = buildResponseFooter({
       inputTokens: 1200,
       outputTokens: 3400,
-      costUsd: 0.042,
+      contextTokens: 55500,
+      contextWindow: 1_000_000,
       model: 'sonnet',
       durationMs: 12300,
     });
     expect(blocks).toHaveLength(1);
     expect(blocks[0].type).toBe('context');
     const text = (blocks[0] as any).elements[0].text;
-    expect(text).toContain('1.2k');
-    expect(text).toContain('3.4k');
-    expect(text).toContain('$0.042');
+    expect(text).toContain('in:1.2k');
+    expect(text).toContain('out:3.4k');
+    expect(text).toContain('ctx');
+    expect(text).toContain('1M');
     expect(text).toContain('sonnet');
     expect(text).toContain('12.3s');
   });
 
-  it('handles zero cost', () => {
+  it('shows 200k context window for haiku', () => {
     const blocks = buildResponseFooter({
-      inputTokens: 0, outputTokens: 0, costUsd: 0, model: 'haiku', durationMs: 500,
+      inputTokens: 0, outputTokens: 0, contextTokens: 0, contextWindow: 200_000, model: 'haiku', durationMs: 500,
     });
-    expect(blocks).toHaveLength(1);
+    const text = (blocks[0] as any).elements[0].text;
+    expect(text).toContain('200k');
   });
 });
 
 describe('buildThreadHeaderText', () => {
-  it('includes project dir basename, model, session ID', () => {
+  it('includes Dir with code block and ID with code block, no model', () => {
     const text = buildThreadHeaderText({
       projectPath: '/Users/alice/dev/myapp',
       model: 'sonnet',
       sessionId: 'abc12345',
     });
-    expect(text).toContain('myapp');
-    expect(text).toContain('sonnet');
-    expect(text).toContain('abc12345');
+    expect(text).toContain('Dir: `/Users/alice/dev/myapp`');
+    expect(text).toContain('ID: `abc12345`');
+    expect(text).not.toContain('sonnet');
+    expect(text).toContain('*Session Started*');
   });
 });
 
