@@ -144,7 +144,6 @@ export class PersistentSession extends EventEmitter {
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
       '--verbose',
-      '--include-partial-messages',
       '--model', this.params.model,
       '--max-budget-usd', String(this.params.budgetUsd),
       '--replay-user-messages',

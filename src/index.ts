@@ -23,7 +23,7 @@ import { SlackActionExecutor } from './streaming/slack-action-executor.js';
 import { ToolResultCache } from './streaming/tool-result-cache.js';
 import { buildToolModal } from './slack/modal-builder.js';
 
-function waitForIdle(session: PersistentSession, timeoutMs = 120000): Promise<void> {
+function waitForIdle(session: PersistentSession, timeoutMs = 300000): Promise<void> {
   return new Promise((resolve, reject) => {
     if (session.state === 'idle') { resolve(); return; }
     logger.info(`[waitForIdle] waiting for session ${session.sessionId}, current state: ${session.state}`);
@@ -338,28 +338,30 @@ async function main(): Promise<void> {
 
     // --- Streaming: StreamProcessor + Executor ---
     const executor = new SlackActionExecutor(client);
-    const streamProcessor = new StreamProcessor({
-      channel: channelId,
-      threadTs,
-      getUpdateUtilization: () => executor.rateLimiter.getUtilization('update'),
-    });
+    const streamProcessor = new StreamProcessor({ channel: channelId, threadTs });
+
+    // Track pending action promises so we can await them before posting footer
+    let pendingActions: Promise<void>[] = [];
 
     // Wire StreamProcessor actions to Slack executor
-    streamProcessor.on('action', async (action: any) => {
-      const result = await executor.execute(action);
-      if (result.ok && result.ts) {
-        if (action.metadata.toolUseId) {
-          streamProcessor.registerMessageTs(action.metadata.toolUseId, result.ts);
+    streamProcessor.on('action', (action: any) => {
+      const promise = (async () => {
+        const result = await executor.execute(action);
+        if (result.ok && result.ts) {
+          if (action.metadata.toolUseId) {
+            streamProcessor.registerMessageTs(action.metadata.toolUseId, result.ts);
+          }
+          if (action.metadata.messageType === 'text' && action.type === 'postMessage') {
+            streamProcessor.registerTextMessageTs(result.ts);
+          }
         }
-        if (action.metadata.messageType === 'text' && action.type === 'postMessage') {
-          streamProcessor.registerTextMessageTs(result.ts);
-        }
-      }
+      })();
+      pendingActions.push(promise);
     });
 
     session.on('message', async (event: any) => {
       try {
-        // Feed ALL events to StreamProcessor (handles tools, thinking, and text streaming)
+        // Feed ALL events to StreamProcessor (handles tools, thinking, and text)
         streamProcessor.processEvent(event);
 
         // Cache tool results for modal display
@@ -381,15 +383,14 @@ async function main(): Promise<void> {
           }
         }
 
-        // Debug: log all events for diagnosis
-        if (event.type === 'assistant') {
-          const contentTypes = (event.message?.content || []).map((b: any) => b.type).join(',');
-          logger.info(`[${session.sessionId}] assistant event: content_types=[${contentTypes}]`);
-        }
-
         // --- Result handling ---
         if (event.type === 'result') {
           logger.info(`[${session.sessionId}] result event received`);
+
+          // Wait for ALL pending Slack actions (text post, text update, tool updates)
+          // to complete before posting footer. This guarantees correct message order.
+          await Promise.all(pendingActions);
+          pendingActions = [];
 
           const usage = event.usage || {};
           const contextTokens = (usage.input_tokens || 0)
@@ -409,7 +410,7 @@ async function main(): Promise<void> {
             durationMs: event.duration_ms || 0,
           });
 
-          // Post result footer as a new message (text was already displayed by StreamProcessor)
+          // Post footer AFTER all text/tool messages are confirmed posted
           await client.chat.postMessage({
             channel: channelId,
             thread_ts: threadTs,

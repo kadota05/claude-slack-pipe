@@ -8,10 +8,9 @@ import {
   getToolOneLiner,
   getToolResultSummary,
 } from './tool-formatter.js';
-import { TextStreamUpdater } from './text-stream-updater.js';
+import { convertMarkdownToMrkdwn } from './markdown-converter.js';
 import { BatchAggregator } from './batch-aggregator.js';
 import { SubagentTracker } from './subagent-tracker.js';
-import type { SubagentStep } from './subagent-tracker.js';
 import type {
   SlackAction,
   StreamProcessorState,
@@ -21,13 +20,11 @@ import type {
 interface StreamProcessorConfig {
   channel: string;
   threadTs: string;
-  getUpdateUtilization?: () => number;
 }
 
 export class StreamProcessor extends EventEmitter {
   private state: StreamProcessorState;
   private readonly config: StreamProcessorConfig;
-  private textUpdater: TextStreamUpdater | null = null;
   private batchAggregator: BatchAggregator;
   private subagentTracker: SubagentTracker;
 
@@ -56,9 +53,8 @@ export class StreamProcessor extends EventEmitter {
       this.handleUser(event.message.content, parentToolUseId);
     } else if (event.type === 'result') {
       this.handleResult(event);
-    } else if (event.type === 'stream_event') {
-      this.handleStreamEvent(event);
     }
+    // stream_event: ignored (--include-partial-messages disabled)
   }
 
   registerMessageTs(toolUseId: string, messageTs: string): void {
@@ -66,30 +62,24 @@ export class StreamProcessor extends EventEmitter {
     if (tracker) {
       tracker.messageTs = messageTs;
     }
-    // Also register for subagent messages
     if (this.subagentTracker.isSubagent(toolUseId)) {
       this.subagentTracker.setMessageTs(toolUseId, messageTs);
     }
   }
 
+  /**
+   * Register the Slack message ts for the text message.
+   * Called by index.ts after executor posts the text message.
+   */
   registerTextMessageTs(messageTs: string): void {
-    if (this.textUpdater) {
-      this.textUpdater.setMessageTs(messageTs);
-    }
+    this.state.textMessageTs = messageTs;
   }
 
   getAccumulatedText(): string {
-    if (this.textUpdater) {
-      return this.textUpdater.getAccumulatedText();
-    }
-    return '';
+    return this.state.textBuffer;
   }
 
   reset(): void {
-    if (this.textUpdater) {
-      this.textUpdater.dispose();
-      this.textUpdater = null;
-    }
     this.batchAggregator.dispose();
     this.batchAggregator = new BatchAggregator({
       windowMs: 1500,
@@ -101,10 +91,6 @@ export class StreamProcessor extends EventEmitter {
   }
 
   dispose(): void {
-    if (this.textUpdater) {
-      this.textUpdater.dispose();
-      this.textUpdater = null;
-    }
     this.batchAggregator.dispose();
     this.removeAllListeners();
   }
@@ -115,8 +101,9 @@ export class StreamProcessor extends EventEmitter {
         this.handleThinking(block.thinking);
       } else if (block.type === 'tool_use') {
         this.handleToolUse(block, parentToolUseId);
+      } else if (block.type === 'text' && block.text) {
+        this.handleText(block.text);
       }
-      // text blocks: now handled by stream_event (text deltas)
     }
   }
 
@@ -135,6 +122,43 @@ export class StreamProcessor extends EventEmitter {
         metadata: { messageType: 'thinking' },
       });
       this.state.phase = 'thinking';
+    }
+  }
+
+  /**
+   * Handle text content block from assistant event.
+   * Converts markdown and posts as a new message, or updates existing text message.
+   */
+  private handleText(text: string): void {
+    this.state.textBuffer += text;
+    this.state.phase = 'responding';
+
+    const converted = convertMarkdownToMrkdwn(this.state.textBuffer);
+    const blocks = this.buildTextBlocks(converted, false);
+
+    if (!this.state.textMessageTs) {
+      // First text → post new message
+      this.emitAction({
+        type: 'postMessage',
+        priority: 1,
+        channel: this.config.channel,
+        threadTs: this.config.threadTs,
+        blocks,
+        text: this.state.textBuffer.slice(0, 100),
+        metadata: { messageType: 'text' },
+      });
+    } else {
+      // Subsequent text → update existing message
+      this.emitAction({
+        type: 'update',
+        priority: 1,
+        channel: this.config.channel,
+        threadTs: this.config.threadTs,
+        messageTs: this.state.textMessageTs,
+        blocks,
+        text: this.state.textBuffer.slice(0, 100),
+        metadata: { messageType: 'text' },
+      });
     }
   }
 
@@ -160,7 +184,6 @@ export class StreamProcessor extends EventEmitter {
 
     // Check if this is a subagent's child tool
     if (parentToolUseId && this.subagentTracker.isChildOf(parentToolUseId)) {
-      // Add step to parent subagent, update parent message
       this.subagentTracker.addStep(parentToolUseId, {
         toolName,
         toolUseId,
@@ -177,7 +200,6 @@ export class StreamProcessor extends EventEmitter {
       this.subagentTracker.registerAgent(toolUseId, description);
       this.state.phase = 'tool_executing';
 
-      // Post independent subagent message
       this.emitAction({
         type: 'postMessage',
         priority: 3,
@@ -276,7 +298,6 @@ export class StreamProcessor extends EventEmitter {
     }
 
     const durationMs = Date.now() - tracker.startTime;
-    // Detect error: is_error flag OR error pattern in content
     const isError = block.is_error === true
       || (typeof block.content === 'string' && /^(Error|error:|ERROR)/.test(block.content));
     const resultText = typeof block.content === 'string'
@@ -318,39 +339,32 @@ export class StreamProcessor extends EventEmitter {
     }
   }
 
-  private handleStreamEvent(wrapper: any): void {
-    const event = wrapper.event;
-    if (!event) return;
+  private handleResult(event: any): void {
+    this.state.phase = 'completed';
 
-    if (event.type === 'content_block_start' && event.content_block?.type === 'text') {
-      // Text block started — create TextStreamUpdater
-      if (!this.textUpdater) {
-        this.textUpdater = new TextStreamUpdater({
-          channel: this.config.channel,
-          threadTs: this.config.threadTs,
-          onAction: (action) => this.emitAction(action),
-          getUpdateUtilization: this.config.getUpdateUtilization || (() => 0.3),
-        });
-        this.state.phase = 'responding';
-      }
-    } else if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-      // Text delta — append to updater
-      if (this.textUpdater && event.delta.text) {
-        this.textUpdater.appendText(event.delta.text);
-      }
-    } else if (event.type === 'content_block_stop') {
-      // Block stopped — finalize text if active (removes typing indicator)
-      if (this.textUpdater) {
-        this.textUpdater.finalize();
-      }
+    // Finalize text message — remove "応答中" indicator
+    if (this.state.textMessageTs && this.state.textBuffer) {
+      const converted = convertMarkdownToMrkdwn(this.state.textBuffer);
+      const blocks = this.buildTextBlocks(converted, true);
+      this.emitAction({
+        type: 'update',
+        priority: 1,
+        channel: this.config.channel,
+        threadTs: this.config.threadTs,
+        messageTs: this.state.textMessageTs,
+        blocks,
+        text: this.state.textBuffer.slice(0, 100),
+        metadata: { messageType: 'text' },
+      });
     }
+
+    this.emit('result', event);
   }
 
   private handleBatchFlush(batch: SlackAction[]): void {
     if (batch.length === 1) {
       this.emitAction(batch[0]);
     } else {
-      // Merge batch into single message
       const mergedBlocks: Record<string, unknown>[] = [];
       const toolNames: string[] = [];
       for (const action of batch) {
@@ -369,13 +383,22 @@ export class StreamProcessor extends EventEmitter {
     }
   }
 
-  private handleResult(event: any): void {
-    this.state.phase = 'completed';
-    // Finalize text streaming if active
-    if (this.textUpdater) {
-      this.textUpdater.finalize();
+  private buildTextBlocks(mrkdwn: string, isComplete: boolean): Record<string, unknown>[] {
+    const blocks: Record<string, unknown>[] = [];
+    const parts = mrkdwn.match(/.{1,2900}/gs) || [mrkdwn];
+    for (const part of parts) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: part },
+      });
     }
-    this.emit('result', event);
+    if (!isComplete) {
+      blocks.push({
+        type: 'context',
+        elements: [{ type: 'mrkdwn', text: ':hourglass_flowing_sand: 応答中...' }],
+      });
+    }
+    return blocks;
   }
 
   private emitAction(action: SlackAction): void {
