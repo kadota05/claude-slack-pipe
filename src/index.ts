@@ -18,12 +18,19 @@ import { sanitizeUserInput, sanitizeOutput } from './utils/sanitizer.js';
 import { buildResponseFooter, buildThreadHeaderText, buildStreamingBlocks } from './slack/block-builder.js';
 import fs from 'node:fs';
 import type { PersistentSession } from './bridge/persistent-session.js';
+import { StreamProcessor } from './streaming/stream-processor.js';
+import { SlackActionExecutor } from './streaming/slack-action-executor.js';
 
-function waitForIdle(session: PersistentSession, timeoutMs = 30000): Promise<void> {
+function waitForIdle(session: PersistentSession, timeoutMs = 120000): Promise<void> {
   return new Promise((resolve, reject) => {
     if (session.state === 'idle') { resolve(); return; }
-    const timer = setTimeout(() => reject(new Error('Session init timeout')), timeoutMs);
+    logger.info(`[waitForIdle] waiting for session ${session.sessionId}, current state: ${session.state}`);
+    const timer = setTimeout(() => {
+      logger.error(`[waitForIdle] timeout after ${timeoutMs}ms, state: ${session.state}`);
+      reject(new Error('Session init timeout'));
+    }, timeoutMs);
     session.on('stateChange', (_from: string, to: string) => {
+      logger.info(`[waitForIdle] stateChange: ${_from} → ${to}`);
       if (to === 'idle') { clearTimeout(timer); resolve(); }
       if (to === 'dead') { clearTimeout(timer); reject(new Error('Session died during init')); }
     });
@@ -204,31 +211,76 @@ async function main(): Promise<void> {
 
       indexEntry = sessionIndexStore.findByThreadTs(threadTs)!;
     } else {
-      // Existing session
+      // Existing session — always use user's current preferred model
+      const prefs = userPrefStore.get(userId);
+      const preferredModel = prefs.defaultModel;
       const existingSession = coordinator.getSession(indexEntry.cliSessionId);
+
       if (existingSession && existingSession.state !== 'dead') {
-        session = existingSession;
+        // If model changed, kill the old session and respawn with new model
+        if (existingSession.model !== preferredModel) {
+          logger.info(`Model changed from ${existingSession.model} to ${preferredModel}, restarting session ${indexEntry.cliSessionId}`);
+          existingSession.kill();
+          // Wait for process to die before respawning
+          await new Promise<void>((resolve) => {
+            if (existingSession.state === 'dead') return resolve();
+            existingSession.on('stateChange', (_from: string, to: string) => {
+              if (to === 'dead') resolve();
+            });
+          });
+          session = await coordinator.getOrCreateSession({
+            sessionId: indexEntry.cliSessionId,
+            userId,
+            model: preferredModel,
+            projectPath: indexEntry.projectPath,
+            budgetUsd: config.defaultBudgetUsd,
+            isResume: true,
+          });
+        } else {
+          session = existingSession;
+        }
       } else {
-        // Respawn dead session
+        // Respawn dead session with current preferred model
         session = await coordinator.getOrCreateSession({
           sessionId: indexEntry.cliSessionId,
           userId,
-          model: indexEntry.model,
+          model: preferredModel,
           projectPath: indexEntry.projectPath,
           budgetUsd: config.defaultBudgetUsd,
           isResume: true,
         });
+      }
+
+      // Update index if model changed
+      if (indexEntry.model !== preferredModel) {
+        sessionIndexStore.update(indexEntry.cliSessionId, { model: preferredModel });
       }
     }
 
     // Wire message handler for this session (idempotent — check if already wired)
     wireSessionOutput(session, channelId, threadTs, reactionManager, app.client, sessionIndexStore);
 
-    // Wait for session to be ready
+    // For a new/starting session, send the initial prompt BEFORE waiting for idle.
+    // Claude CLI stream-json mode requires a user message on stdin before it emits
+    // the system init event — without this the bridge deadlocks.
     if (session.state === 'starting') {
+      activeMessageTs.set(session.sessionId, messageTs);
+      session.sendInitialPrompt(prompt);
+      await reactionManager.addSpawning(channelId, messageTs);
+
+      // Replace hourglass with brain when CLI starts processing
+      const onStateChange = (_from: string, to: string) => {
+        if (to === 'processing') {
+          reactionManager.replaceWithProcessing(channelId, messageTs);
+          session.removeListener('stateChange', onStateChange);
+        }
+      };
+      session.on('stateChange', onStateChange);
+
       try {
         await waitForIdle(session);
       } catch (err) {
+        session.removeListener('stateChange', onStateChange);
         await app.client.chat.postMessage({
           channel: channelId,
           thread_ts: threadTs,
@@ -236,10 +288,13 @@ async function main(): Promise<void> {
         });
         return;
       }
+      // First turn complete — wireSessionOutput already posted the response
+      return;
     }
 
-    // Send prompt or queue
+    // Send prompt or queue (existing/idle session)
     if (session.state === 'idle') {
+      activeMessageTs.set(session.sessionId, messageTs);
       await reactionManager.replaceWithProcessing(channelId, messageTs);
       session.sendPrompt(prompt);
     } else if (session.state === 'processing') {
@@ -257,18 +312,13 @@ async function main(): Promise<void> {
           });
         }
       }
-    } else if (session.state === 'starting') {
-      // Queue for after init
-      const queue = coordinator.getSessionQueue(indexEntry.cliSessionId);
-      if (queue) {
-        queue.enqueue({ id: messageTs, prompt });
-        await reactionManager.addSpawning(channelId, messageTs);
-      }
     }
   }
 
   // Track which sessions have output wired
   const wiredSessions = new Set<string>();
+  // Track which user message is currently being processed per session
+  const activeMessageTs = new Map<string, string>();
 
   function wireSessionOutput(
     session: PersistentSession,
@@ -281,74 +331,109 @@ async function main(): Promise<void> {
     if (wiredSessions.has(session.sessionId)) return;
     wiredSessions.add(session.sessionId);
 
-    let responseBuffer = '';
-    let streamingMessageTs: string | null = null;
-    let lastUpdateTime = 0;
+    // --- Streaming: StreamProcessor + Executor ---
+    const streamProcessor = new StreamProcessor({ channel: channelId, threadTs });
+    const executor = new SlackActionExecutor(client);
+
+    // Wire StreamProcessor tool actions to Slack executor
+    streamProcessor.on('action', async (action: any) => {
+      const result = await executor.execute(action);
+      if (result.ok && result.ts && action.metadata.toolUseId) {
+        streamProcessor.registerMessageTs(action.metadata.toolUseId, result.ts);
+      }
+    });
+
+    // --- Existing text/result handling ---
+    let currentMessageTs: string | null = null;
+    let currentBuffer = '';
+    let pendingPost: Promise<void> | null = null;
 
     session.on('message', async (event: any) => {
       try {
+        // Feed ALL events to StreamProcessor for tool visualization
+        streamProcessor.processEvent(event);
+
+        // Debug: log all events for diagnosis
         if (event.type === 'assistant') {
-          // Handle content_block_delta for streaming text
-          if (event.subtype === 'content_block_delta' && event.delta?.type === 'text_delta') {
-            responseBuffer += event.delta.text;
-          }
-          // Handle full message (content_block_stop or final)
-          else if (event.message?.content) {
-            for (const block of event.message.content) {
-              if (block.type === 'text') {
-                responseBuffer += block.text;
-              }
+          const contentTypes = (event.message?.content || []).map((b: any) => b.type).join(',');
+          logger.info(`[${session.sessionId}] assistant event: content_types=[${contentTypes}]`);
+        }
+
+        // --- Existing text handling (unchanged) ---
+        if (event.type === 'assistant' && event.message?.content) {
+          let text = '';
+          for (const block of event.message.content) {
+            if (block.type === 'text') {
+              text += block.text;
             }
           }
 
-          // Throttled streaming update (every 1.5s)
-          const now = Date.now();
-          if (now - lastUpdateTime > 1500 && responseBuffer) {
-            lastUpdateTime = now;
-            const blocks = buildStreamingBlocks({ text: responseBuffer, isComplete: false });
-            if (!streamingMessageTs) {
+          if (text) {
+            logger.info(`[${session.sessionId}] posting text message (len=${text.length})`);
+            if (pendingPost) await pendingPost;
+
+            if (currentMessageTs) {
+              try {
+                await client.chat.update({
+                  channel: channelId,
+                  ts: currentMessageTs,
+                  blocks: buildStreamingBlocks({ text: currentBuffer, isComplete: true }),
+                  text: currentBuffer.slice(0, 100),
+                });
+              } catch { /* ignore update errors for previous message */ }
+            }
+
+            currentBuffer = sanitizeOutput(text);
+            const blocks = buildStreamingBlocks({ text: currentBuffer, isComplete: false });
+
+            pendingPost = (async () => {
               const resp = await client.chat.postMessage({
                 channel: channelId,
                 thread_ts: threadTs,
                 blocks,
-                text: responseBuffer.slice(0, 100),
+                text: currentBuffer.slice(0, 100),
               });
-              streamingMessageTs = resp.ts;
-            } else {
-              await client.chat.update({
-                channel: channelId,
-                ts: streamingMessageTs,
-                blocks,
-                text: responseBuffer.slice(0, 100),
-              });
-            }
+              currentMessageTs = resp.ts;
+              pendingPost = null;
+            })();
           }
         }
 
+        // --- Existing result handling (unchanged) ---
         if (event.type === 'result') {
-          // Final response
-          const resultText = sanitizeOutput(event.result || responseBuffer || '(no response)');
+          logger.info(`[${session.sessionId}] result event received, currentMessageTs=${currentMessageTs}, currentBuffer.len=${currentBuffer.length}`);
+          if (pendingPost) await pendingPost;
+
+          const usage = event.usage || {};
+          const contextTokens = (usage.input_tokens || 0)
+            + (usage.cache_read_input_tokens || 0)
+            + (usage.cache_creation_input_tokens || 0)
+            + (usage.output_tokens || 0);
+
+          const sessionModel = indexStore.findByThreadTs(threadTs)?.model || '';
+          const contextWindow = sessionModel.includes('haiku') ? 200_000 : 1_000_000;
+
           const footerBlocks = buildResponseFooter({
-            inputTokens: event.usage?.input_tokens || 0,
-            outputTokens: event.usage?.output_tokens || 0,
-            costUsd: event.total_cost_usd || 0,
+            inputTokens: usage.input_tokens || 0,
+            outputTokens: usage.output_tokens || 0,
+            contextTokens,
+            contextWindow,
             model: indexStore.findByThreadTs(threadTs)?.model || 'unknown',
             durationMs: event.duration_ms || 0,
           });
 
-          if (streamingMessageTs) {
-            // Update streaming message with final text
+          if (currentMessageTs) {
             await client.chat.update({
               channel: channelId,
-              ts: streamingMessageTs,
+              ts: currentMessageTs,
               blocks: [
-                { type: 'section', text: { type: 'mrkdwn', text: resultText.slice(0, 3000) } },
+                { type: 'section', text: { type: 'mrkdwn', text: currentBuffer.slice(0, 3000) } },
                 ...footerBlocks,
               ],
-              text: resultText.slice(0, 100),
+              text: currentBuffer.slice(0, 100),
             });
           } else {
-            // No streaming was shown — post final message
+            const resultText = sanitizeOutput(event.result || '(no response)');
             await client.chat.postMessage({
               channel: channelId,
               thread_ts: threadTs,
@@ -360,19 +445,20 @@ async function main(): Promise<void> {
             });
           }
 
-          // Update reactions
-          await rm.replaceWithDone(channelId, threadTs);
+          const msgTs = activeMessageTs.get(session.sessionId) || threadTs;
+          await rm.replaceWithDone(channelId, msgTs);
+          activeMessageTs.delete(session.sessionId);
 
-          // Update session index
           indexStore.update(
             indexStore.findByThreadTs(threadTs)?.cliSessionId || '',
             { lastActiveAt: new Date().toISOString() },
           );
 
-          // Reset buffer for next turn
-          responseBuffer = '';
-          streamingMessageTs = null;
-          lastUpdateTime = 0;
+          currentBuffer = '';
+          currentMessageTs = null;
+
+          // Reset StreamProcessor for next turn
+          streamProcessor.reset();
         }
       } catch (err) {
         logger.error('Error handling session message', { error: (err as Error).message });
@@ -389,6 +475,13 @@ async function main(): Promise<void> {
         });
       } catch {
         // Ignore Slack API errors during error handling
+      }
+    });
+
+    // Cleanup on session death
+    session.on('stateChange', (_from: string, to: string) => {
+      if (to === 'dead' || to === 'ending') {
+        streamProcessor.dispose();
       }
     });
   }
