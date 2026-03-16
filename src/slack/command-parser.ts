@@ -1,36 +1,37 @@
-import type { ParsedCommand } from '../types.js';
+// src/slack/command-parser.ts
 
-const BRIDGE_COMMANDS = new Set([
-  'status',
-  'end',
-  'help',
-  'model',
-  'rename',
-  'panel',
-]);
+const BOT_COMMANDS = new Set(['end', 'status', 'restart']);
+const BOT_COMMAND_ALIASES: Record<string, string> = { 'cli-status': 'status' };
 
-const CC_COMMAND_REGEX = /^cc\s+\/(\S+)(?:\s+(.+))?$/i;
+export type ParsedCommand =
+  | { type: 'bot_command'; command: string; args: string }
+  | { type: 'passthrough'; content: string }
+  | { type: 'plain_text'; content: string };
 
 export function parseCommand(input: string): ParsedCommand {
   const trimmed = input.trim();
-  const match = trimmed.match(CC_COMMAND_REGEX);
 
+  // Check for cc / prefix or bare / prefix
+  const ccMatch = trimmed.match(/^cc\s+\/(\S+)\s*(.*)/);
+  const bareMatch = trimmed.match(/^\/(\S+)\s*(.*)/);
+
+  const match = ccMatch || bareMatch;
   if (!match) {
-    return {
-      type: 'plain_text',
-      command: undefined,
-      args: undefined,
-      rawText: trimmed,
-    };
+    return { type: 'plain_text', content: trimmed };
   }
 
-  const command = match[1].toLowerCase();
-  const args = match[2]?.trim() || undefined;
-  const rawText = `cc /${command}${args ? ` ${args}` : ''}`;
+  const rawCommand = match[1];
+  const args = match[2].trim();
 
-  if (BRIDGE_COMMANDS.has(command)) {
-    return { type: 'bridge_command', command, args, rawText };
+  // Resolve aliases
+  const command = BOT_COMMAND_ALIASES[rawCommand] ?? rawCommand;
+
+  // Bot-handled commands
+  if (BOT_COMMANDS.has(command)) {
+    return { type: 'bot_command', command, args };
   }
 
-  return { type: 'claude_command', command, args, rawText };
+  // Everything else with a slash is passthrough to CLI
+  const content = `/${rawCommand}${args ? ' ' + args : ''}`;
+  return { type: 'passthrough', content };
 }

@@ -1,109 +1,71 @@
+// tests/slack/command-parser.test.ts
 import { describe, it, expect } from 'vitest';
 import { parseCommand } from '../../src/slack/command-parser.js';
 
-describe('parseCommand', () => {
-  it('should parse bridge commands', () => {
-    expect(parseCommand('cc /status')).toEqual({
-      type: 'bridge_command',
-      command: 'status',
-      args: undefined,
-      rawText: 'cc /status',
+describe('parseCommand (phase2)', () => {
+  describe('bot_command', () => {
+    it('recognizes cc /end', () => {
+      const result = parseCommand('cc /end');
+      expect(result).toEqual({ type: 'bot_command', command: 'end', args: '' });
     });
 
-    expect(parseCommand('cc /end')).toEqual({
-      type: 'bridge_command',
-      command: 'end',
-      args: undefined,
-      rawText: 'cc /end',
+    it('recognizes cc /status', () => {
+      const result = parseCommand('cc /status');
+      expect(result).toEqual({ type: 'bot_command', command: 'status', args: '' });
     });
 
-    expect(parseCommand('cc /help')).toEqual({
-      type: 'bridge_command',
-      command: 'help',
-      args: undefined,
-      rawText: 'cc /help',
-    });
-  });
-
-  it('should parse bridge commands with args', () => {
-    expect(parseCommand('cc /model opus')).toEqual({
-      type: 'bridge_command',
-      command: 'model',
-      args: 'opus',
-      rawText: 'cc /model opus',
+    it('recognizes cc /restart', () => {
+      const result = parseCommand('cc /restart');
+      expect(result).toEqual({ type: 'bot_command', command: 'restart', args: '' });
     });
 
-    expect(parseCommand('cc /rename my new session name')).toEqual({
-      type: 'bridge_command',
-      command: 'rename',
-      args: 'my new session name',
-      rawText: 'cc /rename my new session name',
+    it('recognizes cc /cli-status as cc /status alias', () => {
+      const result = parseCommand('cc /cli-status');
+      expect(result).toEqual({ type: 'bot_command', command: 'status', args: '' });
     });
   });
 
-  it('should parse cc /panel as bridge command', () => {
-    expect(parseCommand('cc /panel')).toEqual({
-      type: 'bridge_command',
-      command: 'panel',
-      args: undefined,
-      rawText: 'cc /panel',
+  describe('passthrough', () => {
+    it('passes /compact through', () => {
+      const result = parseCommand('/compact');
+      expect(result).toEqual({ type: 'passthrough', content: '/compact' });
+    });
+
+    it('passes cc /compact through (strips cc prefix)', () => {
+      const result = parseCommand('cc /compact');
+      expect(result).toEqual({ type: 'passthrough', content: '/compact' });
+    });
+
+    it('passes /model opus through', () => {
+      const result = parseCommand('/model opus');
+      expect(result).toEqual({ type: 'passthrough', content: '/model opus' });
+    });
+
+    it('passes cc /commit through', () => {
+      const result = parseCommand('cc /commit');
+      expect(result).toEqual({ type: 'passthrough', content: '/commit' });
+    });
+
+    it('passes /help through', () => {
+      const result = parseCommand('/help');
+      expect(result).toEqual({ type: 'passthrough', content: '/help' });
+    });
+
+    it('passes /diff through', () => {
+      const result = parseCommand('cc /diff');
+      expect(result).toEqual({ type: 'passthrough', content: '/diff' });
     });
   });
 
-  it('should parse Claude Code forwarded commands', () => {
-    expect(parseCommand('cc /commit')).toEqual({
-      type: 'claude_command',
-      command: 'commit',
-      args: undefined,
-      rawText: 'cc /commit',
+  describe('plain_text', () => {
+    it('classifies normal text', () => {
+      const result = parseCommand('Fix the auth bug');
+      expect(result).toEqual({ type: 'plain_text', content: 'Fix the auth bug' });
     });
 
-    expect(parseCommand('cc /review-pr 123')).toEqual({
-      type: 'claude_command',
-      command: 'review-pr',
-      args: '123',
-      rawText: 'cc /review-pr 123',
-    });
-  });
-
-  it('should treat unknown cc commands as claude commands', () => {
-    expect(parseCommand('cc /some-unknown-cmd arg1 arg2')).toEqual({
-      type: 'claude_command',
-      command: 'some-unknown-cmd',
-      args: 'arg1 arg2',
-      rawText: 'cc /some-unknown-cmd arg1 arg2',
-    });
-  });
-
-  it('should treat plain text as plain_text type', () => {
-    expect(parseCommand('implement authentication')).toEqual({
-      type: 'plain_text',
-      command: undefined,
-      args: undefined,
-      rawText: 'implement authentication',
-    });
-  });
-
-  it('should handle case insensitive cc prefix', () => {
-    expect(parseCommand('CC /status').type).toBe('bridge_command');
-    expect(parseCommand('Cc /help').type).toBe('bridge_command');
-  });
-
-  it('should trim whitespace', () => {
-    expect(parseCommand('  cc /status  ')).toEqual({
-      type: 'bridge_command',
-      command: 'status',
-      args: undefined,
-      rawText: 'cc /status',
-    });
-  });
-
-  it('should handle text starting with cc but not a command', () => {
-    expect(parseCommand('cc is cool')).toEqual({
-      type: 'plain_text',
-      command: undefined,
-      args: undefined,
-      rawText: 'cc is cool',
+    it('classifies empty string', () => {
+      const result = parseCommand('');
+      expect(result).toEqual({ type: 'plain_text', content: '' });
     });
   });
 });
