@@ -1,6 +1,6 @@
 // src/streaming/tool-formatter.ts
 
-type Block = Record<string, unknown>;
+import type { Block } from './types.js';
 
 export function getToolOneLiner(toolName: string, input: Record<string, unknown>): string {
   const stripLeadingSlash = (p: string) => p.replace(/^\//, '');
@@ -127,4 +127,148 @@ function escapeMarkdown(s: string): string {
     .replace(/[*]/g, '∗')
     .replace(/[_]/g, '＿')
     .replace(/[~]/g, '∼');
+}
+
+// --- Live display blocks (context blocks for thin/grey appearance) ---
+
+interface LiveToolInfo {
+  toolName: string;
+  oneLiner: string;
+  status: 'running' | 'completed' | 'error';
+  durationMs?: number;
+}
+
+interface LiveStepInfo {
+  toolName: string;
+  oneLiner: string;
+  status: 'running' | 'completed' | 'error';
+}
+
+export function buildThinkingLiveBlocks(texts: string[]): Block[] {
+  const blocks: Block[] = [
+    {
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: ':thought_balloon: _思考中..._' }],
+    },
+  ];
+  for (const text of texts) {
+    const snippet = truncate(text.trim(), 200);
+    blocks.push({
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: `_${escapeMarkdown(snippet)}_` }],
+    });
+  }
+  return blocks;
+}
+
+export function buildToolGroupLiveBlocks(tools: LiveToolInfo[]): Block[] {
+  const lines: string[] = [];
+  for (const tool of tools) {
+    const icon = tool.status === 'completed' ? ':white_check_mark:'
+      : tool.status === 'error' ? ':x:'
+      : ':hourglass_flowing_sand:';
+    const duration = tool.durationMs != null ? ` (${(tool.durationMs / 1000).toFixed(1)}s)` : '';
+    const suffix = tool.status === 'running' ? ' — 実行中...' : duration;
+    lines.push(`${icon} \`${tool.toolName}\` ${escapeMarkdown(tool.oneLiner)}${suffix}`);
+  }
+  return buildContextBlocksFromLines(lines);
+}
+
+export function buildSubagentLiveBlocks(description: string, steps: LiveStepInfo[]): Block[] {
+  const headerBlock: Block = {
+    type: 'context',
+    elements: [{ type: 'mrkdwn', text: `:robot_face: *SubAgent:* _${escapeMarkdown(truncate(description, 60))}_ — 実行中...` }],
+  };
+  const stepLines: string[] = [];
+  for (const step of steps) {
+    const icon = step.status === 'completed' ? ':white_check_mark:'
+      : step.status === 'error' ? ':x:' : ':hourglass_flowing_sand:';
+    stepLines.push(`  ${icon} \`${step.toolName}\` ${escapeMarkdown(step.oneLiner)}`);
+  }
+  const stepBlocks = buildContextBlocksFromLines(stepLines);
+  return [headerBlock, ...stepBlocks];
+}
+
+function buildContextBlocksFromLines(lines: string[]): Block[] {
+  const blocks: Block[] = [];
+  for (let i = 0; i < lines.length; i += 10) {
+    const chunk = lines.slice(i, i + 10);
+    blocks.push({
+      type: 'context',
+      elements: chunk.map(line => ({ type: 'mrkdwn', text: line })),
+    });
+  }
+  if (blocks.length === 0) {
+    blocks.push({
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: '実行中...' }],
+    });
+  }
+  return blocks;
+}
+
+// --- Collapsed display blocks (1-line summary + detail button) ---
+
+interface ToolCountSummary {
+  toolName: string;
+  count: number;
+}
+
+export function buildThinkingCollapsedBlocks(count: number, groupId: string): Block[] {
+  const countStr = count > 1 ? ` (${count}回)` : '';
+  return [
+    {
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: `:thought_balloon: 思考完了${countStr}` }],
+    },
+    {
+      type: 'actions',
+      elements: [{
+        type: 'button',
+        text: { type: 'plain_text', text: '詳細を見る' },
+        action_id: `view_group_detail:${groupId}`,
+      }],
+    },
+  ];
+}
+
+export function buildToolGroupCollapsedBlocks(
+  tools: ToolCountSummary[], totalDurationMs: number, groupId: string,
+): Block[] {
+  const toolStr = tools.map(t => `${t.toolName} × ${t.count}`).join(', ');
+  const durationStr = `${(totalDurationMs / 1000).toFixed(1)}s`;
+  return [
+    {
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: `:wrench: ${toolStr} 完了 (${durationStr})` }],
+    },
+    {
+      type: 'actions',
+      elements: [{
+        type: 'button',
+        text: { type: 'plain_text', text: '詳細を見る' },
+        action_id: `view_group_detail:${groupId}`,
+      }],
+    },
+  ];
+}
+
+export function buildSubagentCollapsedBlocks(
+  description: string, totalDurationMs: number, groupId: string,
+): Block[] {
+  const durationStr = `${(totalDurationMs / 1000).toFixed(1)}s`;
+  return [
+    {
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: `:robot_face: SubAgent: "${escapeMarkdown(truncate(description, 40))}" 完了 (${durationStr})` }],
+    },
+    {
+      type: 'actions',
+      elements: [{
+        type: 'button',
+        text: { type: 'plain_text', text: '詳細を見る' },
+        action_id: `view_group_detail:${groupId}`,
+      }],
+    },
+  ];
 }

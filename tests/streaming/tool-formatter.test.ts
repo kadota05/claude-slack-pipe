@@ -1,6 +1,16 @@
 // tests/streaming/tool-formatter.test.ts
 import { describe, it, expect } from 'vitest';
 import { buildToolRunningBlocks, buildToolCompletedBlocks, buildThinkingBlocks, getToolOneLiner, getToolResultSummary } from '../../src/streaming/tool-formatter.js';
+import {
+  buildThinkingLiveBlocks,
+  buildToolGroupLiveBlocks,
+  buildSubagentLiveBlocks,
+} from '../../src/streaming/tool-formatter.js';
+import {
+  buildThinkingCollapsedBlocks,
+  buildToolGroupCollapsedBlocks,
+  buildSubagentCollapsedBlocks,
+} from '../../src/streaming/tool-formatter.js';
 
 describe('getToolOneLiner', () => {
   it('formats Read tool', () => {
@@ -98,5 +108,126 @@ describe('getToolResultSummary', () => {
 
   it('returns error text on error', () => {
     expect(getToolResultSummary('Bash', 'something failed', true)).toBe('something failed');
+  });
+});
+
+describe('buildThinkingLiveBlocks', () => {
+  it('builds context blocks with italic text', () => {
+    const blocks = buildThinkingLiveBlocks(['考えています...']);
+    expect(blocks.length).toBeGreaterThanOrEqual(1);
+    for (const b of blocks) {
+      expect(b.type).toBe('context');
+    }
+    const allText = JSON.stringify(blocks);
+    expect(allText).toContain('thought_balloon');
+    expect(allText).toContain('思考中');
+  });
+
+  it('includes all thinking texts for multiple thoughts', () => {
+    const blocks = buildThinkingLiveBlocks(['First thought', 'Second thought']);
+    const allText = JSON.stringify(blocks);
+    expect(allText).toContain('First thought');
+    expect(allText).toContain('Second thought');
+  });
+
+  it('truncates long thinking text', () => {
+    const blocks = buildThinkingLiveBlocks(['a'.repeat(500)]);
+    const textBlock = blocks.find(b => JSON.stringify(b).includes('aaa'));
+    const textContent = JSON.stringify(textBlock);
+    expect(textContent).toContain('...');
+    expect(textContent.length).toBeLessThan(500);
+  });
+});
+
+describe('buildToolGroupLiveBlocks', () => {
+  it('builds context blocks for running tools', () => {
+    const blocks = buildToolGroupLiveBlocks([
+      { toolName: 'Read', oneLiner: 'src/auth.ts', status: 'running' },
+    ]);
+    for (const b of blocks) { expect(b.type).toBe('context'); }
+    const allText = JSON.stringify(blocks);
+    expect(allText).toContain('Read');
+    expect(allText).toContain('src/auth.ts');
+    expect(allText).toContain('hourglass');
+  });
+
+  it('shows completed tools with checkmark', () => {
+    const blocks = buildToolGroupLiveBlocks([
+      { toolName: 'Read', oneLiner: 'src/auth.ts', status: 'completed', durationMs: 300 },
+      { toolName: 'Bash', oneLiner: 'npm test', status: 'running' },
+    ]);
+    const allText = JSON.stringify(blocks);
+    expect(allText).toContain('white_check_mark');
+    expect(allText).toContain('hourglass');
+  });
+
+  it('handles 10+ tools with single context block', () => {
+    const tools = Array.from({ length: 12 }, (_, i) => ({
+      toolName: 'Read', oneLiner: `file${i}.ts`, status: 'completed' as const, durationMs: 100,
+    }));
+    const blocks = buildToolGroupLiveBlocks(tools);
+    for (const b of blocks) {
+      if (b.type === 'context') {
+        expect((b.elements as any[]).length).toBeLessThanOrEqual(10);
+      }
+    }
+  });
+});
+
+describe('buildSubagentLiveBlocks', () => {
+  it('builds context blocks for subagent', () => {
+    const blocks = buildSubagentLiveBlocks('コード探索', [
+      { toolName: 'Grep', oneLiner: 'handleAuth', status: 'completed' },
+      { toolName: 'Read', oneLiner: 'src/auth.ts', status: 'running' },
+    ]);
+    for (const b of blocks) { expect(b.type).toBe('context'); }
+    const allText = JSON.stringify(blocks);
+    expect(allText).toContain('SubAgent');
+    expect(allText).toContain('コード探索');
+  });
+});
+
+describe('buildThinkingCollapsedBlocks', () => {
+  it('builds collapsed thinking with detail button', () => {
+    const blocks = buildThinkingCollapsedBlocks(2, 'group-123');
+    const allText = JSON.stringify(blocks);
+    expect(allText).toContain('思考完了');
+    expect(allText).toContain('2回');
+    expect(allText).toContain('view_group_detail:group-123');
+    expect(allText).toContain('詳細を見る');
+  });
+
+  it('omits count when 1', () => {
+    const blocks = buildThinkingCollapsedBlocks(1, 'group-1');
+    const allText = JSON.stringify(blocks);
+    expect(allText).toContain('思考完了');
+    expect(allText).not.toContain('1回');
+  });
+});
+
+describe('buildToolGroupCollapsedBlocks', () => {
+  it('builds collapsed tool group with counts', () => {
+    const blocks = buildToolGroupCollapsedBlocks(
+      [{ toolName: 'Read', count: 2 }, { toolName: 'Bash', count: 1 }],
+      1500, 'group-456',
+    );
+    const allText = JSON.stringify(blocks);
+    expect(allText).toContain('Read × 2');
+    expect(allText).toContain('Bash × 1');
+    expect(allText).toContain('完了');
+    expect(allText).toContain('1.5s');
+    expect(allText).toContain('view_group_detail:group-456');
+  });
+});
+
+describe('buildSubagentCollapsedBlocks', () => {
+  it('builds collapsed subagent with description', () => {
+    const blocks = buildSubagentCollapsedBlocks('コード探索', 5200, 'group-789');
+    const allText = JSON.stringify(blocks);
+    expect(allText).toContain('SubAgent');
+    expect(allText).toContain('コード探索');
+    expect(allText).toContain('完了');
+    expect(allText).toContain('5.2s');
+    expect(allText).toContain('view_group_detail:group-789');
   });
 });
