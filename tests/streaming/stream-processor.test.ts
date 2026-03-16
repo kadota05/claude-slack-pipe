@@ -1,317 +1,216 @@
 // tests/streaming/stream-processor.test.ts
 import { describe, it, expect, beforeEach } from 'vitest';
 import { StreamProcessor } from '../../src/streaming/stream-processor.js';
-import type { SlackAction } from '../../src/streaming/types.js';
 
 describe('StreamProcessor', () => {
   let processor: StreamProcessor;
-  let emittedActions: SlackAction[];
 
   beforeEach(() => {
-    emittedActions = [];
-    processor = new StreamProcessor({
-      channel: 'C123',
-      threadTs: 'T123',
-    });
-    processor.on('action', (action: SlackAction) => {
-      emittedActions.push(action);
-    });
+    processor = new StreamProcessor({ channel: 'C123', threadTs: 'T123' });
   });
 
   describe('thinking events', () => {
-    it('emits postMessage for first thinking', () => {
-      processor.processEvent({
+    it('returns postMessage group action for first thinking', () => {
+      const result = processor.processEvent({
         type: 'assistant',
         message: {
-          content: [{ type: 'thinking', thinking: 'Analyzing the code...' }],
+          content: [{ type: 'thinking', thinking: 'Analyzing...' }],
           stop_reason: null,
         },
       });
 
-      expect(emittedActions).toHaveLength(1);
-      expect(emittedActions[0].type).toBe('postMessage');
-      expect(emittedActions[0].metadata.messageType).toBe('thinking');
-    });
-
-    it('does NOT emit for second thinking', () => {
-      processor.processEvent({
-        type: 'assistant',
-        message: {
-          content: [{ type: 'thinking', thinking: 'First thought' }],
-          stop_reason: null,
-        },
-      });
-
-      processor.processEvent({
-        type: 'assistant',
-        message: {
-          content: [{ type: 'thinking', thinking: 'Second thought' }],
-          stop_reason: null,
-        },
-      });
-
-      const thinkingActions = emittedActions.filter(a => a.metadata.messageType === 'thinking');
-      expect(thinkingActions).toHaveLength(1);
+      expect(result.groupActions).toHaveLength(1);
+      expect(result.groupActions[0].type).toBe('postMessage');
+      expect(result.groupActions[0].category).toBe('thinking');
+      expect(result.textAction).toBeUndefined();
+      expect(result.resultEvent).toBeUndefined();
     });
   });
 
   describe('tool_use events', () => {
-    it('emits postMessage for tool_use', () => {
-      processor.processEvent({
+    it('collapses thinking and starts tool group', () => {
+      const think = processor.processEvent({
         type: 'assistant',
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'toolu_001',
-            name: 'Read',
-            input: { file_path: '/src/auth.ts' },
-          }],
+          content: [{ type: 'thinking', thinking: 'Need to read file' }],
+          stop_reason: null,
+        },
+      });
+      processor.registerGroupMessageTs(think.groupActions[0].groupId, 'THINK_TS');
+
+      const tool = processor.processEvent({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu_001', name: 'Read', input: { file_path: '/a.ts' } }],
           stop_reason: 'tool_use',
         },
       });
 
-      expect(emittedActions).toHaveLength(1);
-      expect(emittedActions[0].type).toBe('postMessage');
-      expect(emittedActions[0].metadata.messageType).toBe('tool_use');
-      expect(emittedActions[0].metadata.toolUseId).toBe('toolu_001');
-      expect(emittedActions[0].metadata.toolName).toBe('Read');
+      const collapse = tool.groupActions.find(a => a.type === 'collapse');
+      const post = tool.groupActions.find(a => a.type === 'postMessage');
+      expect(collapse).toBeDefined();
+      expect(post).toBeDefined();
+      expect(post!.category).toBe('tool');
     });
   });
 
   describe('tool_result events', () => {
-    it('emits update for tool_result', () => {
-      // First: tool_use
-      processor.processEvent({
+    it('collapses tool group when all tools complete', () => {
+      const toolAction = processor.processEvent({
         type: 'assistant',
         message: {
-          content: [{
-            type: 'tool_use',
-            id: 'toolu_001',
-            name: 'Read',
-            input: { file_path: '/src/auth.ts' },
-          }],
+          content: [{ type: 'tool_use', id: 'toolu_001', name: 'Read', input: { file_path: '/a.ts' } }],
           stop_reason: 'tool_use',
         },
       });
+      processor.registerGroupMessageTs(toolAction.groupActions[0].groupId, 'TOOL_TS');
 
-      // Register the message ts
-      processor.registerMessageTs('toolu_001', 'MSG_TS_001');
-
-      // tool_result
-      processor.processEvent({
+      const result = processor.processEvent({
         type: 'user',
         message: {
-          content: [{
-            type: 'tool_result',
-            tool_use_id: 'toolu_001',
-            content: 'file contents here\nline2\nline3',
-          }],
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_001', content: 'file contents' }],
         },
       });
 
-      const updateActions = emittedActions.filter(a => a.type === 'update');
-      expect(updateActions).toHaveLength(1);
-      expect(updateActions[0].messageTs).toBe('MSG_TS_001');
+      const collapse = result.groupActions.find(a => a.type === 'collapse');
+      expect(collapse).toBeDefined();
+    });
+  });
+
+  describe('text events', () => {
+    it('returns text action for text content', () => {
+      const result = processor.processEvent({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'Hello world' }],
+          stop_reason: 'end_turn',
+        },
+      });
+
+      expect(result.textAction).toBeDefined();
+      expect(result.textAction!.type).toBe('postMessage');
+      expect(result.textAction!.metadata.messageType).toBe('text');
+    });
+
+    it('returns update action for subsequent text', () => {
+      const first = processor.processEvent({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'Hello' }],
+          stop_reason: null,
+        },
+      });
+      processor.registerTextMessageTs('TEXT_TS');
+
+      const second = processor.processEvent({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: ' world' }],
+          stop_reason: 'end_turn',
+        },
+      });
+
+      expect(second.textAction).toBeDefined();
+      expect(second.textAction!.type).toBe('update');
     });
   });
 
   describe('result events', () => {
-    it('emits result event (not SlackAction) for result', () => {
-      const resultEvents: any[] = [];
-      processor.on('result', (event: any) => resultEvents.push(event));
+    it('returns resultEvent and flushes active group', () => {
+      const toolAction = processor.processEvent({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu_001', name: 'Read', input: { file_path: '/a.ts' } }],
+          stop_reason: 'tool_use',
+        },
+      });
+      processor.registerGroupMessageTs(toolAction.groupActions[0].groupId, 'TOOL_TS');
 
-      processor.processEvent({
+      const result = processor.processEvent({
         type: 'result',
         duration_ms: 5000,
         usage: { input_tokens: 1000, output_tokens: 500 },
-        total_cost_usd: 0.05,
       });
 
-      expect(resultEvents).toHaveLength(1);
-      expect(resultEvents[0].duration_ms).toBe(5000);
-      expect(emittedActions.filter(a => a.metadata.messageType === 'result')).toHaveLength(0);
+      expect(result.resultEvent).toBeDefined();
+      expect(result.groupActions.length).toBeGreaterThanOrEqual(1);
     });
   });
 
-  describe('mixed content blocks', () => {
-    it('handles thinking + tool_use in same message', () => {
-      processor.processEvent({
+  describe('subagent events', () => {
+    it('handles Agent tool as subagent', () => {
+      const result = processor.processEvent({
         type: 'assistant',
         message: {
-          content: [
-            { type: 'thinking', thinking: 'I need to read the file' },
-            { type: 'tool_use', id: 'toolu_002', name: 'Read', input: { file_path: '/a.ts' } },
-          ],
+          content: [{ type: 'tool_use', id: 'toolu_agent', name: 'Agent', input: { prompt: 'Search code', description: 'コード探索' } }],
           stop_reason: 'tool_use',
         },
       });
 
-      expect(emittedActions.length).toBeGreaterThanOrEqual(1);
-      const toolActions = emittedActions.filter(a => a.metadata.messageType === 'tool_use');
-      expect(toolActions).toHaveLength(1);
+      expect(result.groupActions).toHaveLength(1);
+      expect(result.groupActions[0].category).toBe('subagent');
+    });
+
+    it('tracks child tools via parent_tool_use_id', () => {
+      const agentResult = processor.processEvent({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu_agent', name: 'Agent', input: { description: 'Search' } }],
+          stop_reason: 'tool_use',
+        },
+      });
+      processor.registerGroupMessageTs(agentResult.groupActions[0].groupId, 'AGENT_TS');
+
+      const childResult = processor.processEvent({
+        type: 'assistant',
+        parent_tool_use_id: 'toolu_agent',
+        message: {
+          content: [{ type: 'tool_use', id: 'toolu_child', name: 'Grep', input: { pattern: 'auth' } }],
+          stop_reason: 'tool_use',
+        },
+      });
+
+      // Should not create a new tool group (no postMessage with category 'tool')
+      const toolGroupPost = childResult.groupActions.find(a => a.type === 'postMessage' && a.category === 'tool');
+      expect(toolGroupPost).toBeUndefined();
     });
   });
 
-  describe('state tracking', () => {
-    it('tracks cumulative tool count', () => {
-      for (let i = 0; i < 3; i++) {
-        processor.processEvent({
-          type: 'assistant',
-          message: {
-            content: [{
-              type: 'tool_use',
-              id: `toolu_${i}`,
-              name: 'Read',
-              input: { file_path: `/file${i}.ts` },
-            }],
-            stop_reason: 'tool_use',
-          },
-        });
-      }
-      expect(processor.getState().cumulativeToolCount).toBe(3);
-    });
-
-    it('resets state correctly', () => {
-      processor.processEvent({
+  describe('mixed event sequences', () => {
+    it('handles thinking → tool → thinking → tool → text', () => {
+      const t1 = processor.processEvent({
         type: 'assistant',
-        message: {
-          content: [{ type: 'thinking', thinking: 'test' }],
-          stop_reason: null,
-        },
+        message: { content: [{ type: 'thinking', thinking: 'Think 1' }], stop_reason: null },
       });
-      expect(processor.getState().thinkingCount).toBe(1);
+      processor.registerGroupMessageTs(t1.groupActions[0].groupId, 'T1_TS');
 
-      processor.reset();
-      expect(processor.getState().thinkingCount).toBe(0);
-      expect(processor.getState().cumulativeToolCount).toBe(0);
-    });
-  });
-
-  describe('subagent handling', () => {
-    it('registers Agent tool as subagent and emits subagent message', () => {
-      processor.processEvent({
+      const tool1 = processor.processEvent({
         type: 'assistant',
-        parent_tool_use_id: null,
-        message: {
-          content: [{
-            type: 'tool_use',
-            id: 'toolu_agent1',
-            name: 'Agent',
-            input: { prompt: 'Search for auth code' },
-          }],
-          stop_reason: 'tool_use',
-        },
+        message: { content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: { file_path: '/a.ts' } }], stop_reason: 'tool_use' },
       });
-
-      const subagentActions = emittedActions.filter(a => a.metadata.messageType === 'subagent');
-      expect(subagentActions).toHaveLength(1);
-      expect(subagentActions[0].type).toBe('postMessage');
-    });
-
-    it('routes child tools to subagent update instead of individual message', () => {
-      // Register agent
-      processor.processEvent({
-        type: 'assistant',
-        parent_tool_use_id: null,
-        message: {
-          content: [{
-            type: 'tool_use', id: 'toolu_agent1', name: 'Agent',
-            input: { prompt: 'Explore' },
-          }],
-          stop_reason: 'tool_use',
-        },
-      });
-      processor.registerMessageTs('toolu_agent1', 'AGENT_MSG_TS');
-
-      // Child tool
-      processor.processEvent({
-        type: 'assistant',
-        parent_tool_use_id: 'toolu_agent1',
-        message: {
-          content: [{
-            type: 'tool_use', id: 'toolu_child1', name: 'Read',
-            input: { file_path: '/src/a.ts' },
-          }],
-          stop_reason: 'tool_use',
-        },
-      });
-
-      // Should emit update to subagent message, not new postMessage
-      const updates = emittedActions.filter(a => a.type === 'update' && a.metadata.messageType === 'subagent');
-      expect(updates.length).toBeGreaterThanOrEqual(1);
-      expect(updates[0].messageTs).toBe('AGENT_MSG_TS');
-    });
-
-    it('routes child tool results to subagent update', () => {
-      // Register agent
-      processor.processEvent({
-        type: 'assistant',
-        parent_tool_use_id: null,
-        message: {
-          content: [{
-            type: 'tool_use', id: 'toolu_agent2', name: 'Agent',
-            input: { prompt: 'Analyze code' },
-          }],
-          stop_reason: 'tool_use',
-        },
-      });
-      processor.registerMessageTs('toolu_agent2', 'AGENT_MSG_TS2');
-
-      // Child tool
-      processor.processEvent({
-        type: 'assistant',
-        parent_tool_use_id: 'toolu_agent2',
-        message: {
-          content: [{
-            type: 'tool_use', id: 'toolu_child2', name: 'Grep',
-            input: { pattern: 'auth' },
-          }],
-          stop_reason: 'tool_use',
-        },
-      });
-
-      // Child tool result
-      processor.processEvent({
-        type: 'user',
-        parent_tool_use_id: 'toolu_agent2',
-        message: {
-          content: [{
-            type: 'tool_result',
-            tool_use_id: 'toolu_child2',
-            content: 'found 3 matches',
-          }],
-        },
-      });
-
-      const updates = emittedActions.filter(a => a.type === 'update' && a.metadata.messageType === 'subagent');
-      // Should have at least 2 updates: one for child tool start, one for child tool result
-      expect(updates.length).toBeGreaterThanOrEqual(2);
-    });
-  });
-
-  describe('error detection in tool_result', () => {
-    it('detects is_error flag', () => {
-      processor.processEvent({
-        type: 'assistant',
-        message: {
-          content: [{ type: 'tool_use', id: 'toolu_err', name: 'Bash', input: { command: 'exit 1' } }],
-          stop_reason: 'tool_use',
-        },
-      });
-      processor.registerMessageTs('toolu_err', 'MSG_ERR');
+      const tool1PostAction = tool1.groupActions.find(a => a.type === 'postMessage');
+      processor.registerGroupMessageTs(tool1PostAction!.groupId, 'TOOL1_TS');
 
       processor.processEvent({
         type: 'user',
-        message: {
-          content: [{ type: 'tool_result', tool_use_id: 'toolu_err', content: 'Error: command failed', is_error: true }],
-        },
+        message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
       });
 
-      const updates = emittedActions.filter(a => a.type === 'update');
-      expect(updates).toHaveLength(1);
-      // The update should show error icon (:x:)
-      const blockText = JSON.stringify(updates[0].blocks);
-      expect(blockText).toContain(':x:');
+      const t2 = processor.processEvent({
+        type: 'assistant',
+        message: { content: [{ type: 'thinking', thinking: 'Think 2' }], stop_reason: null },
+      });
+      const t2Post = t2.groupActions.find(a => a.type === 'postMessage');
+      processor.registerGroupMessageTs(t2Post!.groupId, 'T2_TS');
+
+      const text = processor.processEvent({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Answer' }], stop_reason: 'end_turn' },
+      });
+
+      const collapse = text.groupActions.find(a => a.type === 'collapse');
+      expect(collapse).toBeDefined();
+      expect(text.textAction).toBeDefined();
     });
   });
 });
