@@ -7,6 +7,7 @@ import {
   buildResponseFooter,
   buildThreadHeaderText,
   buildStreamingBlocks,
+  buildHomeTabBlocksV2,
 } from '../../src/slack/block-builder.js';
 import type { SessionMetadata } from '../../src/types.js';
 
@@ -157,5 +158,75 @@ describe('buildStreamingBlocks', () => {
     const blocks = buildStreamingBlocks({ text: 'Final answer', isComplete: true });
     const ctx = blocks.find((b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('応答中'));
     expect(ctx).toBeUndefined();
+  });
+});
+
+describe('buildHomeTabBlocksV2 (phase2)', () => {
+  const defaultParams = {
+    model: 'sonnet',
+    directoryId: 'myapp',
+    directories: [
+      { id: 'myapp', name: 'myapp', path: '/home/user/myapp' },
+      { id: 'other', name: 'other', path: '/home/user/other' },
+    ],
+    activeSessions: [
+      { cliSessionId: 's1', name: 'fix-auth-bug', lastActiveAt: '2026-03-16T10:00:00Z', model: 'sonnet', status: 'active' as const, threadTs: '123', channelId: 'C001' },
+    ],
+    endedSessions: [
+      { cliSessionId: 's2', name: 'refactor-api', lastActiveAt: '2026-03-16T08:00:00Z', model: 'opus', status: 'ended' as const, threadTs: '456', channelId: 'C001' },
+    ],
+    page: 0,
+    totalPages: 1,
+  };
+
+  it('includes header section', () => {
+    const blocks = buildHomeTabBlocksV2(defaultParams);
+    const header = blocks.find((b: any) => b.type === 'header');
+    expect(header).toBeDefined();
+  });
+
+  it('includes model static_select', () => {
+    const blocks = buildHomeTabBlocksV2(defaultParams);
+    const modelSection = blocks.find((b: any) =>
+      b.accessory?.action_id === 'home_set_default_model'
+    );
+    expect(modelSection).toBeDefined();
+  });
+
+  it('includes directory static_select', () => {
+    const blocks = buildHomeTabBlocksV2(defaultParams);
+    const dirSection = blocks.find((b: any) =>
+      b.accessory?.action_id === 'home_set_directory'
+    );
+    expect(dirSection).toBeDefined();
+  });
+
+  it('includes usage guide section', () => {
+    const blocks = buildHomeTabBlocksV2(defaultParams);
+    const found = blocks.some((b: any) =>
+      b.text?.text?.includes('Usage Guide') || b.text?.text?.includes('usage') || b.text?.text?.includes('Usage')
+    );
+    expect(found).toBe(true);
+  });
+
+  it('includes active session', () => {
+    const blocks = buildHomeTabBlocksV2(defaultParams);
+    const found = blocks.some((b: any) =>
+      JSON.stringify(b).includes('fix-auth-bug')
+    );
+    expect(found).toBe(true);
+  });
+
+  it('stays within 100 block limit', () => {
+    const blocks = buildHomeTabBlocksV2(defaultParams);
+    expect(blocks.length).toBeLessThanOrEqual(100);
+  });
+
+  it('includes pagination when totalPages > 1', () => {
+    const blocks = buildHomeTabBlocksV2({ ...defaultParams, totalPages: 3, page: 1 });
+    const found = blocks.some((b: any) =>
+      JSON.stringify(b).includes('session_page_next') || JSON.stringify(b).includes('session_page_prev')
+    );
+    expect(found).toBe(true);
   });
 });
