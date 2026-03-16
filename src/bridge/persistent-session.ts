@@ -64,7 +64,13 @@ export class PersistentSession extends EventEmitter {
       throw new Error(`Cannot send prompt in state: ${this._state}`);
     }
     this.clearIdleTimer();
-    this.writeStdin({ type: 'user_message', content: prompt });
+    this.writeStdin({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: prompt }],
+      },
+    });
     this.transition('processing');
   }
 

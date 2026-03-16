@@ -3,11 +3,38 @@ import path from 'node:path';
 import { logger } from '../utils/logger.js';
 import type { ProjectInfo, SessionInfoLight } from '../types.js';
 
+/**
+ * Decode a Claude CLI project ID back to the actual filesystem path.
+ * Claude encodes `/` as `-`, so `-Users-archeco055-dev-claude-slack-pipe`
+ * could be `/Users/archeco055/dev/claude-slack-pipe` or other splits.
+ * We try all possible splits and return the first one that exists on disk.
+ */
 export function decodeProjectId(id: string): string {
-  // Claude CLI encodes CWD by replacing '/' with '-'
-  // e.g., -Users-alice-code-myapp -> /Users/alice/code/myapp
-  // This is lossy for directories with hyphens, but matches CLI behavior
-  return id.replace(/-/g, '/');
+  // Remove leading '-' which represents the root '/'
+  const withoutLeading = id.startsWith('-') ? id.slice(1) : id;
+  const segments = withoutLeading.split('-');
+
+  // Try to greedily build the path, checking each candidate against the filesystem
+  const result = greedyDecode(segments, '/');
+  return result || '/' + withoutLeading.replace(/-/g, '/'); // fallback
+}
+
+function greedyDecode(segments: string[], prefix: string): string | null {
+  if (segments.length === 0) {
+    return fs.existsSync(prefix) ? prefix : null;
+  }
+
+  // Try joining progressively more segments with '-' (to handle hyphenated dir names)
+  for (let take = segments.length; take >= 1; take--) {
+    const dirName = segments.slice(0, take).join('-');
+    const candidate = path.join(prefix, dirName);
+    if (fs.existsSync(candidate)) {
+      if (take === segments.length) return candidate;
+      const rest = greedyDecode(segments.slice(take), candidate);
+      if (rest) return rest;
+    }
+  }
+  return null;
 }
 
 export class ProjectStore {
@@ -44,6 +71,7 @@ export class ProjectStore {
         return {
           id: e.name,
           projectPath,
+          workingDirectory: decodeProjectId(e.name),
           sessionCount: sessionFiles.length,
           lastModified: new Date(stat.mtimeMs),
         };

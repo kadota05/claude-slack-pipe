@@ -78,7 +78,8 @@ export interface ToolUseSummary {
 
 export interface ProjectInfo {
   id: string;
-  projectPath: string;
+  projectPath: string;       // Claude metadata dir: ~/.claude/projects/<encoded>
+  workingDirectory: string;   // Actual project CWD decoded from id
   sessionCount: number;
   lastModified: Date;
 }
@@ -393,8 +394,11 @@ export interface ControlMessage {
 }
 
 export interface StdinUserMessage {
-  type: 'user_message';
-  content: string;
+  type: 'user';
+  message: {
+    role: 'user';
+    content: Array<{ type: 'text'; text: string }>;
+  };
 }
 
 export type StdinMessage = ControlMessage | StdinUserMessage;

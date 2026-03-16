@@ -3,7 +3,7 @@ import { loadConfig } from './config.js';
 import { logger } from './utils/logger.js';
 import { AuthMiddleware } from './middleware/auth.js';
 import { RateLimiter } from './middleware/rate-limiter.js';
-import { ProjectStore, decodeProjectId } from './store/project-store.js';
+import { ProjectStore } from './store/project-store.js';
 import { UserPreferenceStore } from './store/user-preference-store.js';
 import { SessionIndexStore } from './store/session-index-store.js';
 import { SessionCoordinator } from './bridge/session-coordinator.js';
@@ -161,7 +161,7 @@ async function main(): Promise<void> {
       const activeDir = prefs.activeDirectoryId
         ? projects.find((p) => p.id === prefs.activeDirectoryId)
         : projects[0];
-      const projectPath = activeDir ? decodeProjectId(activeDir.id) : process.cwd();
+      const projectPath = activeDir?.workingDirectory || process.cwd();
       const sessionId = crypto.randomUUID();
 
       session = await coordinator.getOrCreateSession({

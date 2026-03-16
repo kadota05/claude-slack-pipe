@@ -107,7 +107,7 @@ describe('PersistentSession', () => {
     session.sendPrompt('Hello');
     expect(session.state).toBe('processing');
     expect(mockProc.stdin.write).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'user_message', content: 'Hello' }) + '\n'
+      JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'Hello' }] } }) + '\n'
     );
   });
 

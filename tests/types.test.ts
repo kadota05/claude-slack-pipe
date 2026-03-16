@@ -45,16 +45,16 @@ describe('StdinMessage types', () => {
 
   it('should accept StdinUserMessage', () => {
     const msg: StdinUserMessage = {
-      type: 'user_message',
-      content: 'hello',
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: 'hello' }] },
     };
-    expect(msg.type).toBe('user_message');
+    expect(msg.type).toBe('user');
   });
 
   it('should accept both as StdinMessage union', () => {
     const messages: StdinMessage[] = [
       { type: 'control', subtype: 'keep_alive' },
-      { type: 'user_message', content: 'test' },
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'test' }] } },
     ];
     expect(messages).toHaveLength(2);
   });
