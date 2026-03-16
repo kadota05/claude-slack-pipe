@@ -1,4 +1,5 @@
 // src/slack/modal-builder.ts
+import type { Block } from '../streaming/types.js';
 
 interface ToolModalConfig {
   toolId: string;
@@ -8,8 +9,6 @@ interface ToolModalConfig {
   durationMs: number;
   isError: boolean;
 }
-
-type Block = Record<string, unknown>;
 
 export function buildToolModal(config: ToolModalConfig): any {
   const titleText = truncate(`${config.toolName} 詳細`, 24);
@@ -48,6 +47,83 @@ export function buildToolModal(config: ToolModalConfig): any {
     title: { type: 'plain_text', text: titleText },
     close: { type: 'plain_text', text: '閉じる' },
     blocks,
+  };
+}
+
+export function buildThinkingModal(thinkingTexts: string[]): any {
+  const blocks: Block[] = [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: '思考詳細' },
+    },
+  ];
+
+  for (const [i, text] of thinkingTexts.entries()) {
+    if (i > 0) {
+      blocks.push({ type: 'divider' });
+    }
+
+    blocks.push({
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: `*思考 ${i + 1}*` }],
+    });
+
+    const parts = splitContent(text, 2900);
+    for (const part of parts) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: part },
+      });
+    }
+  }
+
+  return {
+    type: 'modal',
+    title: { type: 'plain_text', text: '思考詳細' },
+    close: { type: 'plain_text', text: '閉じる' },
+    blocks: blocks.slice(0, 100),
+  };
+}
+
+interface ToolGroupModalItem {
+  toolUseId: string;
+  toolName: string;
+  oneLiner: string;
+  durationMs: number;
+  isError: boolean;
+}
+
+export function buildToolGroupModal(tools: ToolGroupModalItem[]): any {
+  const blocks: Block[] = [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: 'ツール実行詳細' },
+    },
+  ];
+
+  for (const tool of tools) {
+    const icon = tool.isError ? ':x:' : ':white_check_mark:';
+    const durationStr = `${(tool.durationMs / 1000).toFixed(1)}s`;
+
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `${icon} \`${tool.toolName}\` ${tool.oneLiner} (${durationStr})`,
+      },
+      accessory: {
+        type: 'button',
+        text: { type: 'plain_text', text: '詳細' },
+        action_id: `view_tool_detail:${tool.toolUseId}`,
+      },
+    });
+  }
+
+  return {
+    type: 'modal',
+    title: { type: 'plain_text', text: 'ツール実行詳細' },
+    close: { type: 'plain_text', text: '閉じる' },
+    blocks: blocks.slice(0, 100),
   };
 }
 
