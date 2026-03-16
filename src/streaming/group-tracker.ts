@@ -1,106 +1,125 @@
 // src/streaming/group-tracker.ts
 import {
   buildThinkingLiveBlocks,
-  buildThinkingCollapsedBlocks,
   buildToolGroupLiveBlocks,
-  buildToolGroupCollapsedBlocks,
   buildSubagentLiveBlocks,
-  buildSubagentCollapsedBlocks,
+  buildBundleCollapsedBlocks,
   getToolOneLiner,
 } from './tool-formatter.js';
 import type {
-  GroupAction,
+  BundleAction,
   GroupCategory,
   ActiveGroup,
+  CompletedGroup,
   Block,
 } from './types.js';
 
 const DEBOUNCE_MS = 500;
 
+interface ActiveBundle {
+  id: string;
+  index: number;
+  messageTs: string | null;
+  completedGroups: CompletedGroup[];
+}
+
 export class GroupTracker {
+  private activeBundle: ActiveBundle | null = null;
   private activeGroup: ActiveGroup | null = null;
-  private completedGroups: Map<string, ActiveGroup> = new Map();
-  private groupCounter = 0;
+  private bundleCounter = 0;
 
-  handleThinking(text: string): GroupAction[] {
-    const actions: GroupAction[] = [];
+  handleThinking(text: string): BundleAction[] {
+    const actions: BundleAction[] = [];
 
+    // Ensure bundle exists
+    const isNewBundle = this.ensureBundle(actions);
+
+    // Switch category if needed
     if (this.activeGroup && this.activeGroup.category !== 'thinking') {
-      actions.push(...this.collapseActiveGroup());
+      this.moveActiveGroupToCompleted();
+      this.activeGroup = null;
     }
 
     if (!this.activeGroup) {
-      const group = this.createGroup('thinking');
-      group.thinkingTexts.push(text);
-      this.activeGroup = group;
+      this.activeGroup = this.createActiveGroup('thinking');
+      this.activeGroup.thinkingTexts.push(text);
 
-      actions.push({
-        type: 'postMessage',
-        groupId: group.id,
-        blocks: buildThinkingLiveBlocks(group.thinkingTexts),
-        text: '思考中...',
-        category: 'thinking',
-      });
+      if (isNewBundle) {
+        // postMessage already added by ensureBundle with placeholder blocks;
+        // update blocks now
+        const postAction = actions.find(a => a.type === 'postMessage');
+        if (postAction) {
+          postAction.blocks = buildThinkingLiveBlocks(this.activeGroup.thinkingTexts);
+          postAction.text = '思考中...';
+        }
+      } else if (this.activeBundle!.messageTs) {
+        // Bundle exists, just switched category — update message
+        actions.push(this.buildUpdateAction(
+          buildThinkingLiveBlocks(this.activeGroup.thinkingTexts),
+          '思考中...',
+        ));
+      }
     } else {
       this.activeGroup.thinkingTexts.push(text);
 
-      if (this.activeGroup.messageTs && this.shouldEmitUpdate()) {
+      if (this.activeBundle!.messageTs && this.shouldEmitUpdate()) {
         this.activeGroup.lastUpdateTime = Date.now();
-        actions.push({
-          type: 'update',
-          groupId: this.activeGroup.id,
-          messageTs: this.activeGroup.messageTs,
-          blocks: buildThinkingLiveBlocks(this.activeGroup.thinkingTexts),
-          text: '思考中...',
-          category: 'thinking',
-        });
+        actions.push(this.buildUpdateAction(
+          buildThinkingLiveBlocks(this.activeGroup.thinkingTexts),
+          '思考中...',
+        ));
       }
     }
 
     return actions;
   }
 
-  handleToolUse(toolUseId: string, toolName: string, input: Record<string, unknown>): GroupAction[] {
-    const actions: GroupAction[] = [];
+  handleToolUse(toolUseId: string, toolName: string, input: Record<string, unknown>): BundleAction[] {
+    const actions: BundleAction[] = [];
     const oneLiner = getToolOneLiner(toolName, input);
 
+    // Ensure bundle exists
+    const isNewBundle = this.ensureBundle(actions);
+
+    // Switch category if needed
     if (this.activeGroup && this.activeGroup.category !== 'tool') {
-      actions.push(...this.collapseActiveGroup());
+      this.moveActiveGroupToCompleted();
+      this.activeGroup = null;
     }
 
     if (!this.activeGroup) {
-      const group = this.createGroup('tool');
-      group.tools.push({ toolUseId, toolName, input, oneLiner, status: 'running', startTime: Date.now() });
-      this.activeGroup = group;
+      this.activeGroup = this.createActiveGroup('tool');
+      this.activeGroup.tools.push({ toolUseId, toolName, input, oneLiner, status: 'running', startTime: Date.now() });
 
-      actions.push({
-        type: 'postMessage',
-        groupId: group.id,
-        blocks: buildToolGroupLiveBlocks(group.tools),
-        text: `${toolName}: ${oneLiner}`,
-        category: 'tool',
-      });
+      if (isNewBundle) {
+        const postAction = actions.find(a => a.type === 'postMessage');
+        if (postAction) {
+          postAction.blocks = buildToolGroupLiveBlocks(this.activeGroup.tools);
+          postAction.text = `${toolName}: ${oneLiner}`;
+        }
+      } else if (this.activeBundle!.messageTs) {
+        actions.push(this.buildUpdateAction(
+          buildToolGroupLiveBlocks(this.activeGroup.tools),
+          `${toolName}: ${oneLiner}`,
+        ));
+      }
     } else {
       this.activeGroup.tools.push({ toolUseId, toolName, input, oneLiner, status: 'running', startTime: Date.now() });
 
-      if (this.activeGroup.messageTs && this.shouldEmitUpdate()) {
+      if (this.activeBundle!.messageTs && this.shouldEmitUpdate()) {
         this.activeGroup.lastUpdateTime = Date.now();
-        actions.push({
-          type: 'update',
-          groupId: this.activeGroup.id,
-          messageTs: this.activeGroup.messageTs,
-          blocks: buildToolGroupLiveBlocks(this.activeGroup.tools),
-          text: `${this.activeGroup.tools.length}ツール実行中`,
-          category: 'tool',
-        });
+        actions.push(this.buildUpdateAction(
+          buildToolGroupLiveBlocks(this.activeGroup.tools),
+          `${this.activeGroup.tools.length}ツール実行中`,
+        ));
       }
     }
 
     return actions;
   }
 
-  handleToolResult(toolUseId: string, result: string, isError: boolean): GroupAction[] {
-    const actions: GroupAction[] = [];
+  handleToolResult(toolUseId: string, result: string, isError: boolean): BundleAction[] {
+    const actions: BundleAction[] = [];
 
     if (!this.activeGroup || this.activeGroup.category !== 'tool') return actions;
 
@@ -112,73 +131,69 @@ export class GroupTracker {
     tool.result = result;
     tool.isError = isError;
 
-    const allDone = this.activeGroup.tools.every(t => t.status !== 'running');
-
-    if (allDone) {
-      actions.push(...this.collapseActiveGroup());
-    } else if (this.activeGroup.messageTs && this.shouldEmitUpdate()) {
+    if (this.activeBundle?.messageTs && this.shouldEmitUpdate()) {
       this.activeGroup.lastUpdateTime = Date.now();
-      actions.push({
-        type: 'update',
-        groupId: this.activeGroup.id,
-        messageTs: this.activeGroup.messageTs,
-        blocks: buildToolGroupLiveBlocks(this.activeGroup.tools),
-        text: `${this.activeGroup.tools.length}ツール実行中`,
-        category: 'tool',
-      });
+      actions.push(this.buildUpdateAction(
+        buildToolGroupLiveBlocks(this.activeGroup.tools),
+        `${this.activeGroup.tools.length}ツール実行中`,
+      ));
     }
 
     return actions;
   }
 
-  handleSubagentStart(toolUseId: string, description: string): GroupAction[] {
-    const actions: GroupAction[] = [];
+  handleSubagentStart(toolUseId: string, description: string): BundleAction[] {
+    const actions: BundleAction[] = [];
 
+    const isNewBundle = this.ensureBundle(actions);
+
+    // Switch category — move active group to completed
     if (this.activeGroup) {
-      actions.push(...this.collapseActiveGroup());
+      this.moveActiveGroupToCompleted();
+      this.activeGroup = null;
     }
 
-    const group = this.createGroup('subagent');
-    group.agentToolUseId = toolUseId;
-    group.agentDescription = description;
-    this.activeGroup = group;
+    this.activeGroup = this.createActiveGroup('subagent');
+    this.activeGroup.agentToolUseId = toolUseId;
+    this.activeGroup.agentDescription = description;
 
-    actions.push({
-      type: 'postMessage',
-      groupId: group.id,
-      blocks: buildSubagentLiveBlocks(description, []),
-      text: `SubAgent: ${description}`,
-      category: 'subagent',
-    });
+    if (isNewBundle) {
+      const postAction = actions.find(a => a.type === 'postMessage');
+      if (postAction) {
+        postAction.blocks = buildSubagentLiveBlocks(description, []);
+        postAction.text = `SubAgent: ${description}`;
+      }
+    } else if (this.activeBundle!.messageTs) {
+      actions.push(this.buildUpdateAction(
+        buildSubagentLiveBlocks(description, []),
+        `SubAgent: ${description}`,
+      ));
+    }
 
     return actions;
   }
 
-  handleSubagentStep(agentToolUseId: string, toolName: string, toolUseId: string, oneLiner: string): GroupAction[] {
-    const actions: GroupAction[] = [];
+  handleSubagentStep(agentToolUseId: string, toolName: string, toolUseId: string, oneLiner: string): BundleAction[] {
+    const actions: BundleAction[] = [];
 
     if (!this.activeGroup || this.activeGroup.category !== 'subagent') return actions;
     if (this.activeGroup.agentToolUseId !== agentToolUseId) return actions;
 
     this.activeGroup.agentSteps.push({ toolName, toolUseId, oneLiner, status: 'running' });
 
-    if (this.activeGroup.messageTs && this.shouldEmitUpdate()) {
+    if (this.activeBundle?.messageTs && this.shouldEmitUpdate()) {
       this.activeGroup.lastUpdateTime = Date.now();
-      actions.push({
-        type: 'update',
-        groupId: this.activeGroup.id,
-        messageTs: this.activeGroup.messageTs,
-        blocks: buildSubagentLiveBlocks(this.activeGroup.agentDescription || '', this.activeGroup.agentSteps),
-        text: `SubAgent: ${this.activeGroup.agentDescription}`,
-        category: 'subagent',
-      });
+      actions.push(this.buildUpdateAction(
+        buildSubagentLiveBlocks(this.activeGroup.agentDescription || '', this.activeGroup.agentSteps),
+        `SubAgent: ${this.activeGroup.agentDescription}`,
+      ));
     }
 
     return actions;
   }
 
-  handleSubagentStepResult(agentToolUseId: string, toolUseId: string, isError: boolean): GroupAction[] {
-    const actions: GroupAction[] = [];
+  handleSubagentStepResult(agentToolUseId: string, toolUseId: string, isError: boolean): BundleAction[] {
+    const actions: BundleAction[] = [];
 
     if (!this.activeGroup || this.activeGroup.category !== 'subagent') return actions;
     if (this.activeGroup.agentToolUseId !== agentToolUseId) return actions;
@@ -188,128 +203,105 @@ export class GroupTracker {
       step.status = isError ? 'error' : 'completed';
     }
 
-    if (this.activeGroup.messageTs && this.shouldEmitUpdate()) {
+    if (this.activeBundle?.messageTs && this.shouldEmitUpdate()) {
       this.activeGroup.lastUpdateTime = Date.now();
-      actions.push({
-        type: 'update',
-        groupId: this.activeGroup.id,
-        messageTs: this.activeGroup.messageTs,
-        blocks: buildSubagentLiveBlocks(this.activeGroup.agentDescription || '', this.activeGroup.agentSteps),
-        text: `SubAgent: ${this.activeGroup.agentDescription}`,
-        category: 'subagent',
-      });
+      actions.push(this.buildUpdateAction(
+        buildSubagentLiveBlocks(this.activeGroup.agentDescription || '', this.activeGroup.agentSteps),
+        `SubAgent: ${this.activeGroup.agentDescription}`,
+      ));
     }
 
     return actions;
   }
 
-  handleSubagentComplete(agentToolUseId: string, _result: string, _durationMs: number): GroupAction[] {
+  handleSubagentComplete(agentToolUseId: string, _result: string, _durationMs: number): BundleAction[] {
     if (!this.activeGroup || this.activeGroup.category !== 'subagent') return [];
     if (this.activeGroup.agentToolUseId !== agentToolUseId) return [];
 
-    return this.collapseActiveGroup();
+    // Move subagent group to completed, but do NOT collapse the bundle
+    this.moveActiveGroupToCompleted();
+    this.activeGroup = null;
+
+    return [];
   }
 
-  handleTextStart(): GroupAction[] {
-    if (!this.activeGroup) return [];
-    return this.collapseActiveGroup();
+  handleTextStart(sessionId: string): BundleAction[] {
+    if (!this.activeBundle) return [];
+
+    // Move active group to completed
+    if (this.activeGroup) {
+      this.moveActiveGroupToCompleted();
+      this.activeGroup = null;
+    }
+
+    return this.collapseActiveBundle(sessionId);
   }
 
-  flushActiveGroup(): GroupAction[] {
-    if (!this.activeGroup) return [];
-    if (this.activeGroup.category === 'tool') {
-      for (const tool of this.activeGroup.tools) {
-        if (tool.status === 'running') tool.status = 'error';
+  flushActiveBundle(sessionId: string): BundleAction[] {
+    if (!this.activeBundle) return [];
+
+    // Mark running items as error
+    if (this.activeGroup) {
+      if (this.activeGroup.category === 'tool') {
+        for (const tool of this.activeGroup.tools) {
+          if (tool.status === 'running') tool.status = 'error';
+        }
       }
-    }
-    if (this.activeGroup.category === 'subagent') {
-      for (const step of this.activeGroup.agentSteps) {
-        if (step.status === 'running') step.status = 'error';
+      if (this.activeGroup.category === 'subagent') {
+        for (const step of this.activeGroup.agentSteps) {
+          if (step.status === 'running') step.status = 'error';
+        }
       }
+      this.moveActiveGroupToCompleted();
+      this.activeGroup = null;
     }
-    return this.collapseActiveGroup();
+
+    return this.collapseActiveBundle(sessionId);
   }
 
-  registerMessageTs(groupId: string, messageTs: string): void {
-    if (this.activeGroup && this.activeGroup.id === groupId) {
-      this.activeGroup.messageTs = messageTs;
+  registerBundleMessageTs(bundleId: string, messageTs: string): void {
+    if (this.activeBundle && this.activeBundle.id === bundleId) {
+      this.activeBundle.messageTs = messageTs;
     }
   }
 
-  setAgentId(groupId: string, agentId: string): void {
-    if (this.activeGroup && this.activeGroup.id === groupId) {
+  setAgentId(agentId: string): void {
+    if (this.activeGroup) {
       this.activeGroup.agentId = agentId;
     }
-    const completed = this.completedGroups.get(groupId);
-    if (completed) {
-      completed.agentId = agentId;
-    }
   }
 
-  getGroupData(groupId: string): ActiveGroup | undefined {
-    if (this.activeGroup && this.activeGroup.id === groupId) {
-      return this.activeGroup;
-    }
-    return this.completedGroups.get(groupId);
+  getActiveGroupData(): ActiveGroup | null {
+    return this.activeGroup;
   }
 
-  private shouldEmitUpdate(): boolean {
-    if (!this.activeGroup) return false;
-    return Date.now() - this.activeGroup.lastUpdateTime >= DEBOUNCE_MS;
+  // --- Private helpers ---
+
+  private ensureBundle(actions: BundleAction[]): boolean {
+    if (this.activeBundle) return false;
+
+    this.bundleCounter++;
+    this.activeBundle = {
+      id: `bundle-${this.bundleCounter}`,
+      index: this.bundleCounter - 1,
+      messageTs: null,
+      completedGroups: [],
+    };
+
+    actions.push({
+      type: 'postMessage',
+      bundleId: this.activeBundle.id,
+      bundleIndex: this.activeBundle.index,
+      blocks: [], // will be filled by caller
+      text: '',
+    });
+
+    return true;
   }
 
-  private collapseActiveGroup(): GroupAction[] {
-    const group = this.activeGroup;
-    if (!group) return [];
-
-    this.activeGroup = null;
-    this.completedGroups.set(group.id, group);
-
-    if (!group.messageTs) return [];
-
-    const blocks = this.buildCollapseBlocks(group);
-    return [{
-      type: 'collapse',
-      groupId: group.id,
-      messageTs: group.messageTs,
-      blocks,
-      text: this.buildCollapseText(group),
-      category: group.category,
-    }];
-  }
-
-  private buildCollapseBlocks(group: ActiveGroup): Block[] {
-    switch (group.category) {
-      case 'thinking':
-        return buildThinkingCollapsedBlocks(group.thinkingTexts.length, group.id);
-      case 'tool': {
-        const counts = new Map<string, number>();
-        for (const t of group.tools) {
-          counts.set(t.toolName, (counts.get(t.toolName) || 0) + 1);
-        }
-        const toolSummaries = [...counts.entries()].map(([toolName, count]) => ({ toolName, count }));
-        const totalDuration = group.tools.reduce((sum, t) => sum + (t.durationMs || 0), 0);
-        return buildToolGroupCollapsedBlocks(toolSummaries, totalDuration, group.id);
-      }
-      case 'subagent': {
-        const totalDuration = Date.now() - group.startTime;
-        return buildSubagentCollapsedBlocks(group.agentDescription || 'SubAgent', totalDuration, group.id);
-      }
-    }
-  }
-
-  private buildCollapseText(group: ActiveGroup): string {
-    switch (group.category) {
-      case 'thinking': return '思考完了';
-      case 'tool': return `${group.tools.length}ツール完了`;
-      case 'subagent': return `SubAgent: ${group.agentDescription || ''} 完了`;
-    }
-  }
-
-  private createGroup(category: GroupCategory): ActiveGroup {
-    this.groupCounter++;
+  private createActiveGroup(category: GroupCategory): ActiveGroup {
     return {
-      id: `grp-${this.groupCounter}`,
+      id: `grp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       category,
       messageTs: null,
       startTime: Date.now(),
@@ -318,5 +310,91 @@ export class GroupTracker {
       tools: [],
       agentSteps: [],
     };
+  }
+
+  private moveActiveGroupToCompleted(): void {
+    if (!this.activeGroup || !this.activeBundle) return;
+
+    const cg: CompletedGroup = {
+      category: this.activeGroup.category,
+    };
+
+    if (this.activeGroup.category === 'thinking') {
+      cg.thinkingTexts = [...this.activeGroup.thinkingTexts];
+    } else if (this.activeGroup.category === 'tool') {
+      cg.tools = [...this.activeGroup.tools];
+      cg.totalDuration = this.activeGroup.tools.reduce((sum, t) => sum + (t.durationMs || 0), 0);
+    } else if (this.activeGroup.category === 'subagent') {
+      cg.agentDescription = this.activeGroup.agentDescription;
+      cg.agentId = this.activeGroup.agentId;
+      cg.agentSteps = [...this.activeGroup.agentSteps];
+      cg.duration = Date.now() - this.activeGroup.startTime;
+    }
+
+    this.activeBundle.completedGroups.push(cg);
+  }
+
+  private collapseActiveBundle(sessionId: string): BundleAction[] {
+    const bundle = this.activeBundle;
+    if (!bundle) return [];
+
+    // Count categories
+    let thinkingCount = 0, toolCount = 0, toolDurationMs = 0, subagentCount = 0, subagentDurationMs = 0;
+    for (const cg of bundle.completedGroups) {
+      if (cg.category === 'thinking') thinkingCount++;
+      else if (cg.category === 'tool') {
+        toolCount += cg.tools?.length || 0;
+        toolDurationMs += cg.totalDuration || 0;
+      }
+      else if (cg.category === 'subagent') {
+        subagentCount++;
+        subagentDurationMs += cg.duration || 0;
+      }
+    }
+
+    const blocks = buildBundleCollapsedBlocks({
+      thinkingCount,
+      toolCount,
+      toolDurationMs,
+      subagentCount,
+      subagentDurationMs,
+      sessionId,
+      bundleIndex: bundle.index,
+    });
+
+    const actions: BundleAction[] = [];
+
+    if (bundle.messageTs) {
+      actions.push({
+        type: 'collapse',
+        bundleId: bundle.id,
+        bundleIndex: bundle.index,
+        messageTs: bundle.messageTs,
+        blocks,
+        text: 'bundle collapsed',
+        sessionId,
+      });
+    }
+
+    // Reset bundle
+    this.activeBundle = null;
+
+    return actions;
+  }
+
+  private buildUpdateAction(blocks: Block[], text: string): BundleAction {
+    return {
+      type: 'update',
+      bundleId: this.activeBundle!.id,
+      bundleIndex: this.activeBundle!.index,
+      messageTs: this.activeBundle!.messageTs!,
+      blocks,
+      text,
+    };
+  }
+
+  private shouldEmitUpdate(): boolean {
+    if (!this.activeGroup) return false;
+    return Date.now() - this.activeGroup.lastUpdateTime >= DEBOUNCE_MS;
   }
 }

@@ -1,161 +1,208 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { GroupTracker } from '../../src/streaming/group-tracker.js';
 
-describe('GroupTracker', () => {
+describe('GroupTracker with ActionBundle', () => {
   let tracker: GroupTracker;
 
   beforeEach(() => {
     tracker = new GroupTracker();
   });
 
-  describe('thinking groups', () => {
-    it('creates a new group on first thinking', () => {
-      const actions = tracker.handleThinking('First thought');
+  describe('bundle lifecycle', () => {
+    it('creates bundle on first thinking event', () => {
+      const actions = tracker.handleThinking('thought');
       expect(actions).toHaveLength(1);
       expect(actions[0].type).toBe('postMessage');
-      expect(actions[0].category).toBe('thinking');
+      expect(actions[0].bundleId).toMatch(/^bundle-/);
+      expect(actions[0].bundleIndex).toBe(0);
     });
 
-    it('updates existing group on subsequent thinking', () => {
-      const first = tracker.handleThinking('First thought');
-      const groupId = first[0].groupId;
-      tracker.registerMessageTs(groupId, 'MSG_TS_1');
-
-      const second = tracker.handleThinking('Second thought');
-      expect(second.length).toBeGreaterThanOrEqual(1);
-      const updateAction = second.find(a => a.type === 'update');
-      expect(updateAction).toBeDefined();
-      expect(updateAction!.groupId).toBe(groupId);
-    });
-
-    it('collapses thinking group when tool arrives', () => {
-      const first = tracker.handleThinking('Thinking...');
-      const groupId = first[0].groupId;
-      tracker.registerMessageTs(groupId, 'MSG_TS_1');
-
-      const actions = tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
-      const collapseAction = actions.find(a => a.type === 'collapse');
-      const postAction = actions.find(a => a.type === 'postMessage');
-      expect(collapseAction).toBeDefined();
-      expect(collapseAction!.groupId).toBe(groupId);
-      expect(postAction).toBeDefined();
-      expect(postAction!.category).toBe('tool');
-    });
-
-    it('collapses thinking group when text arrives', () => {
-      const first = tracker.handleThinking('Thinking...');
-      const groupId = first[0].groupId;
-      tracker.registerMessageTs(groupId, 'MSG_TS_1');
-
-      const actions = tracker.handleTextStart();
-      const collapseAction = actions.find(a => a.type === 'collapse');
-      expect(collapseAction).toBeDefined();
-      expect(collapseAction!.groupId).toBe(groupId);
-    });
-  });
-
-  describe('tool groups', () => {
-    it('creates new tool group on first tool_use', () => {
+    it('creates bundle on first tool event', () => {
       const actions = tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
       expect(actions).toHaveLength(1);
       expect(actions[0].type).toBe('postMessage');
-      expect(actions[0].category).toBe('tool');
+      expect(actions[0].bundleId).toMatch(/^bundle-/);
     });
 
-    it('updates group on subsequent tool_use', () => {
-      const first = tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
-      tracker.registerMessageTs(first[0].groupId, 'MSG_TS');
+    it('reuses same bundle across category switches', () => {
+      const a1 = tracker.handleThinking('thought');
+      const bundleId = a1[0].bundleId;
+      tracker.registerBundleMessageTs(bundleId, 'MSG_TS');
 
-      const group = tracker.getGroupData(first[0].groupId)!;
-      group.lastUpdateTime = 0;
-
-      const second = tracker.handleToolUse('toolu_002', 'Read', { file_path: '/b.ts' });
-      const updateAction = second.find(a => a.type === 'update');
-      expect(updateAction).toBeDefined();
+      const a2 = tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
+      expect(a2.every(a => a.bundleId === bundleId)).toBe(true);
+      const hasPost = a2.some(a => a.type === 'postMessage');
+      expect(hasPost).toBe(false);
     });
 
-    it('collapses tool group when all tools complete', () => {
-      const first = tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
-      tracker.registerMessageTs(first[0].groupId, 'MSG_TS');
+    it('collapses bundle on handleTextStart', () => {
+      const a1 = tracker.handleThinking('thought');
+      tracker.registerBundleMessageTs(a1[0].bundleId, 'MSG_TS');
 
-      const result = tracker.handleToolResult('toolu_001', 'file content', false);
-      const collapseAction = result.find(a => a.type === 'collapse');
-      expect(collapseAction).toBeDefined();
+      tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
+      tracker.handleToolResult('toolu_001', 'content', false);
+
+      const collapseActions = tracker.handleTextStart('sess-1');
+      const collapse = collapseActions.find(a => a.type === 'collapse');
+      expect(collapse).toBeDefined();
+      expect(collapse!.bundleIndex).toBe(0);
     });
 
-    it('does NOT collapse when some tools still running', () => {
-      const first = tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
-      tracker.registerMessageTs(first[0].groupId, 'MSG_TS');
-      tracker.handleToolUse('toolu_002', 'Read', { file_path: '/b.ts' });
+    it('increments bundleIndex on each text arrival', () => {
+      const a1 = tracker.handleThinking('thought1');
+      tracker.registerBundleMessageTs(a1[0].bundleId, 'MSG_TS_1');
+      tracker.handleTextStart('sess-1');
 
-      const result = tracker.handleToolResult('toolu_001', 'content', false);
-      const collapseAction = result.find(a => a.type === 'collapse');
-      expect(collapseAction).toBeUndefined();
-    });
-  });
-
-  describe('subagent groups', () => {
-    it('creates new subagent group', () => {
-      const actions = tracker.handleSubagentStart('toolu_agent', 'コード探索');
-      expect(actions).toHaveLength(1);
-      expect(actions[0].type).toBe('postMessage');
-      expect(actions[0].category).toBe('subagent');
-    });
-
-    it('collapses subagent group on complete', () => {
-      const first = tracker.handleSubagentStart('toolu_agent', 'コード探索');
-      tracker.registerMessageTs(first[0].groupId, 'MSG_TS');
-
-      const complete = tracker.handleSubagentComplete('toolu_agent', 'done', 5000);
-      const collapseAction = complete.find(a => a.type === 'collapse');
-      expect(collapseAction).toBeDefined();
+      const a2 = tracker.handleThinking('thought2');
+      expect(a2[0].bundleIndex).toBe(1);
     });
   });
 
-  describe('flushActiveGroup', () => {
-    it('collapses active group', () => {
-      const first = tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
-      tracker.registerMessageTs(first[0].groupId, 'MSG_TS');
+  describe('live display — category switches', () => {
+    it('shows only active category blocks on update', () => {
+      const a1 = tracker.handleThinking('thought');
+      tracker.registerBundleMessageTs(a1[0].bundleId, 'MSG_TS');
 
-      const actions = tracker.flushActiveGroup();
+      const a2 = tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
+      const update = a2.find(a => a.type === 'update');
+      expect(update).toBeDefined();
+      const blockTexts = JSON.stringify(update!.blocks);
+      expect(blockTexts).toContain('Read');
+      expect(blockTexts).not.toContain('思考中');
+    });
+  });
+
+  describe('tool group within bundle', () => {
+    it('keeps sequential tools in same active group', () => {
+      const a1 = tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
+      const bundleId = a1[0].bundleId;
+      tracker.registerBundleMessageTs(bundleId, 'MSG_TS');
+
+      tracker.handleToolResult('toolu_001', 'content', false);
+      const a2 = tracker.handleToolUse('toolu_002', 'Bash', { command: 'ls' });
+      expect(a2.every(a => a.type !== 'postMessage')).toBe(true);
+    });
+  });
+
+  describe('subagent within bundle', () => {
+    it('switches to subagent active group without new message', () => {
+      const a1 = tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
+      tracker.registerBundleMessageTs(a1[0].bundleId, 'MSG_TS');
+      tracker.handleToolResult('toolu_001', 'ok', false);
+
+      const a2 = tracker.handleSubagentStart('toolu_agent', 'コード探索');
+      expect(a2.every(a => a.type !== 'postMessage')).toBe(true);
+      const update = a2.find(a => a.type === 'update');
+      expect(update).toBeDefined();
+    });
+
+    it('tracks subagent steps as updates within same bundle', () => {
+      const a1 = tracker.handleSubagentStart('toolu_agent', 'コード探索');
+      const bundleId = a1[0].bundleId;
+      tracker.registerBundleMessageTs(bundleId, 'MSG_TS');
+
+      const group = tracker.getActiveGroupData();
+      if (group) group.lastUpdateTime = 0;
+
+      const a2 = tracker.handleSubagentStep('toolu_agent', 'Read', 'toolu_child', 'src/a.ts');
+      const update = a2.find(a => a.type === 'update');
+      expect(update).toBeDefined();
+      expect(update!.bundleId).toBe(bundleId);
+    });
+
+    it('subagent complete does NOT collapse bundle — keeps it open', () => {
+      const a1 = tracker.handleSubagentStart('toolu_agent', 'コード探索');
+      const bundleId = a1[0].bundleId;
+      tracker.registerBundleMessageTs(bundleId, 'MSG_TS');
+
+      const a2 = tracker.handleSubagentComplete('toolu_agent', 'done', 5000);
+      const collapse = a2.find(a => a.type === 'collapse');
+      expect(collapse).toBeUndefined();
+    });
+
+    it('subagent complete → next tool arrives → same bundle', () => {
+      const a1 = tracker.handleSubagentStart('toolu_agent', 'コード探索');
+      const bundleId = a1[0].bundleId;
+      tracker.registerBundleMessageTs(bundleId, 'MSG_TS');
+
+      tracker.handleSubagentComplete('toolu_agent', 'done', 5000);
+
+      const a3 = tracker.handleToolUse('toolu_002', 'Grep', { pattern: 'foo' });
+      expect(a3.every(a => a.bundleId === bundleId)).toBe(true);
+      expect(a3.every(a => a.type !== 'postMessage')).toBe(true);
+    });
+
+    it('subagent step result updates within same bundle', () => {
+      const a1 = tracker.handleSubagentStart('toolu_agent', 'コード探索');
+      tracker.registerBundleMessageTs(a1[0].bundleId, 'MSG_TS');
+
+      tracker.handleSubagentStep('toolu_agent', 'Read', 'toolu_child', 'src/a.ts');
+
+      const group = tracker.getActiveGroupData();
+      if (group) group.lastUpdateTime = 0;
+
+      const a2 = tracker.handleSubagentStepResult('toolu_agent', 'toolu_child', false);
+      const update = a2.find(a => a.type === 'update');
+      if (update) {
+        expect(update.bundleId).toBe(a1[0].bundleId);
+      }
+    });
+  });
+
+  describe('collapsed bundle summary', () => {
+    it('aggregates counts across completed groups', () => {
+      const a1 = tracker.handleThinking('thought');
+      tracker.registerBundleMessageTs(a1[0].bundleId, 'MSG_TS');
+
+      tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
+      tracker.handleToolResult('toolu_001', 'ok', false);
+
+      const collapse = tracker.handleTextStart('sess-1');
+      const collapseAction = collapse.find(a => a.type === 'collapse');
+      expect(collapseAction).toBeDefined();
+      const blockText = JSON.stringify(collapseAction!.blocks);
+      expect(blockText).toContain('💭×1');
+      expect(blockText).toContain('🔧×1');
+    });
+  });
+
+  describe('flushActiveBundle', () => {
+    it('collapses active bundle on stream end', () => {
+      const a1 = tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
+      tracker.registerBundleMessageTs(a1[0].bundleId, 'MSG_TS');
+
+      const actions = tracker.flushActiveBundle('sess-1');
       expect(actions).toHaveLength(1);
       expect(actions[0].type).toBe('collapse');
     });
 
     it('marks running tools as error on flush', () => {
-      const first = tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
-      const groupId = first[0].groupId;
-      tracker.registerMessageTs(groupId, 'MSG_TS');
+      const a1 = tracker.handleToolUse('toolu_001', 'Read', { file_path: '/a.ts' });
+      tracker.registerBundleMessageTs(a1[0].bundleId, 'MSG_TS');
 
-      tracker.flushActiveGroup();
-
-      const group = tracker.getGroupData(groupId)!;
-      expect(group.tools[0].status).toBe('error');
+      tracker.flushActiveBundle('sess-1');
     });
 
-    it('returns empty when no active group', () => {
-      const actions = tracker.flushActiveGroup();
+    it('returns empty when no active bundle', () => {
+      const actions = tracker.flushActiveBundle('sess-1');
       expect(actions).toHaveLength(0);
     });
   });
 
-  describe('group data retrieval', () => {
-    it('returns active group data', () => {
-      const first = tracker.handleThinking('Thinking...');
-      const data = tracker.getGroupData(first[0].groupId);
-      expect(data).toBeDefined();
-      expect(data!.thinkingTexts).toEqual(['Thinking...']);
-    });
+  describe('registerBundleMessageTs', () => {
+    it('registers messageTs for active bundle', () => {
+      const a1 = tracker.handleThinking('thought');
+      const bundleId = a1[0].bundleId;
 
-    it('returns completed group data', () => {
-      const first = tracker.handleThinking('Thinking...');
-      const groupId = first[0].groupId;
-      tracker.registerMessageTs(groupId, 'MSG_TS');
-      tracker.handleTextStart();
+      tracker.registerBundleMessageTs(bundleId, 'MSG_TS');
 
-      const data = tracker.getGroupData(groupId);
-      expect(data).toBeDefined();
-      expect(data!.thinkingTexts).toEqual(['Thinking...']);
+      const group = tracker.getActiveGroupData();
+      if (group) group.lastUpdateTime = 0;
+
+      const a2 = tracker.handleThinking('more thought');
+      const update = a2.find(a => a.type === 'update');
+      expect(update).toBeDefined();
+      expect(update!.messageTs).toBe('MSG_TS');
     });
   });
 });
