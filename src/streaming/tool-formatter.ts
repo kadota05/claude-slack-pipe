@@ -272,3 +272,45 @@ export function buildSubagentCollapsedBlocks(
     },
   ];
 }
+
+interface BundleCollapsedConfig {
+  thinkingCount: number;
+  toolCount: number;
+  toolDurationMs: number;
+  subagentCount: number;
+  subagentDurationMs: number;
+  sessionId: string;
+  bundleIndex: number;
+}
+
+export function buildBundleCollapsedBlocks(config: BundleCollapsedConfig): Block[] {
+  const parts: string[] = [];
+
+  // Fixed order: 💭 → 🔧 → 🤖, only present categories
+  if (config.thinkingCount > 0) {
+    parts.push(`💭×${config.thinkingCount}`);
+  }
+  if (config.toolCount > 0) {
+    const durationStr = `${(config.toolDurationMs / 1000).toFixed(1)}s`;
+    parts.push(`🔧×${config.toolCount} (${durationStr})`);
+  }
+  if (config.subagentCount > 0) {
+    const durationStr = `${(config.subagentDurationMs / 1000).toFixed(1)}s`;
+    parts.push(`🤖×${config.subagentCount} (${durationStr})`);
+  }
+
+  return [
+    {
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: parts.join('  ') }],
+    },
+    {
+      type: 'actions',
+      elements: [{
+        type: 'button',
+        text: { type: 'plain_text', text: '詳細を見る' },
+        action_id: `view_bundle:${config.sessionId}:${config.bundleIndex}`,
+      }],
+    },
+  ];
+}

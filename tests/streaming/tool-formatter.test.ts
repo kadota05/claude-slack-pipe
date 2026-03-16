@@ -11,6 +11,7 @@ import {
   buildToolGroupCollapsedBlocks,
   buildSubagentCollapsedBlocks,
 } from '../../src/streaming/tool-formatter.js';
+import { buildBundleCollapsedBlocks } from '../../src/streaming/tool-formatter.js';
 
 describe('getToolOneLiner', () => {
   it('formats Read tool', () => {
@@ -229,5 +230,54 @@ describe('buildSubagentCollapsedBlocks', () => {
     expect(allText).toContain('完了');
     expect(allText).toContain('5.2s');
     expect(allText).toContain('view_group_detail:group-789');
+  });
+});
+
+describe('buildBundleCollapsedBlocks', () => {
+  it('shows only present categories', () => {
+    const blocks = buildBundleCollapsedBlocks({
+      thinkingCount: 2,
+      toolCount: 3,
+      toolDurationMs: 1000,
+      subagentCount: 0,
+      subagentDurationMs: 0,
+      sessionId: 'sess-1',
+      bundleIndex: 0,
+    });
+    expect(blocks).toHaveLength(2);
+    const contextText = (blocks[0] as any).elements[0].text;
+    expect(contextText).toContain('💭×2');
+    expect(contextText).toContain('🔧×3');
+    expect(contextText).not.toContain('🤖');
+  });
+
+  it('shows all three categories when present', () => {
+    const blocks = buildBundleCollapsedBlocks({
+      thinkingCount: 1,
+      toolCount: 2,
+      toolDurationMs: 500,
+      subagentCount: 1,
+      subagentDurationMs: 3000,
+      sessionId: 'sess-1',
+      bundleIndex: 1,
+    });
+    const contextText = (blocks[0] as any).elements[0].text;
+    expect(contextText).toContain('💭×1');
+    expect(contextText).toContain('🔧×2');
+    expect(contextText).toContain('🤖×1');
+  });
+
+  it('includes view_bundle action_id with sessionId and bundleIndex', () => {
+    const blocks = buildBundleCollapsedBlocks({
+      thinkingCount: 1,
+      toolCount: 0,
+      toolDurationMs: 0,
+      subagentCount: 0,
+      subagentDurationMs: 0,
+      sessionId: 'abc-123',
+      bundleIndex: 2,
+    });
+    const actionsBlock = blocks.find((b: any) => b.type === 'actions') as any;
+    expect(actionsBlock.elements[0].action_id).toBe('view_bundle:abc-123:2');
   });
 });
