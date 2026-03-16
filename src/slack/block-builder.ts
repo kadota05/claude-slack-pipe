@@ -124,10 +124,10 @@ export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
   const statusText = isActive ? 'Active' : 'Inactive';
 
   const blocks: Block[] = [
-    // 1. Status indicator (serves as header)
+    // 1. Status as header (large bold text)
     {
-      type: 'section',
-      text: { type: 'mrkdwn', text: `${statusEmoji} *${statusText}*` },
+      type: 'header',
+      text: { type: 'plain_text', text: `${statusEmoji} ${statusText}` },
     },
     // 2. Model selector
     {
@@ -168,10 +168,12 @@ export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
     }] : []),
     // 4. Divider
     { type: 'divider' },
-    // 5. Recent Sessions header
+    // 5. Recent Sessions header (context = small, subtle)
     {
-      type: 'section',
-      text: { type: 'mrkdwn', text: '*Recent Sessions*' },
+      type: 'context',
+      elements: [
+        { type: 'mrkdwn', text: '*Recent Sessions*' },
+      ],
     },
   ];
 
@@ -187,21 +189,12 @@ export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
       if (i > 0) {
         blocks.push({ type: 'divider' });
       }
-      blocks.push(
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `*${s.firstPromptPreview}*`,
-          },
-        },
-        {
-          type: 'context',
-          elements: [
-            { type: 'mrkdwn', text: `:clock1: ${s.timeAgo}  |  :file_folder: ${s.projectPath}` },
-          ],
-        },
-      );
+      blocks.push({
+        type: 'context',
+        elements: [
+          { type: 'mrkdwn', text: `*${s.firstPromptPreview}*\n:clock1: ${s.timeAgo}  |  :file_folder: ${s.projectPath}` },
+        ],
+      });
     }
   }
 
