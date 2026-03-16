@@ -468,3 +468,25 @@ export interface UserPreferenceFile {
   version: 1;
   users: Record<string, UserPreferences>;
 }
+
+// ============================================================
+// Phase 2: Session Index Types
+// ============================================================
+
+export interface SessionIndexEntry {
+  cliSessionId: string;
+  threadTs: string;
+  channelId: string;
+  userId: string;
+  projectPath: string;
+  name: string;
+  model: string;
+  status: 'active' | 'ended';
+  createdAt: string; // ISO
+  lastActiveAt: string; // ISO
+}
+
+export interface SessionIndexFile {
+  version: 1;
+  sessions: Record<string, SessionIndexEntry>; // keyed by cliSessionId
+}
