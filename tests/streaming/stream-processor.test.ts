@@ -187,6 +187,108 @@ describe('StreamProcessor', () => {
     });
   });
 
+  describe('subagent handling', () => {
+    it('registers Agent tool as subagent and emits subagent message', () => {
+      processor.processEvent({
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: {
+          content: [{
+            type: 'tool_use',
+            id: 'toolu_agent1',
+            name: 'Agent',
+            input: { prompt: 'Search for auth code' },
+          }],
+          stop_reason: 'tool_use',
+        },
+      });
+
+      const subagentActions = emittedActions.filter(a => a.metadata.messageType === 'subagent');
+      expect(subagentActions).toHaveLength(1);
+      expect(subagentActions[0].type).toBe('postMessage');
+    });
+
+    it('routes child tools to subagent update instead of individual message', () => {
+      // Register agent
+      processor.processEvent({
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: {
+          content: [{
+            type: 'tool_use', id: 'toolu_agent1', name: 'Agent',
+            input: { prompt: 'Explore' },
+          }],
+          stop_reason: 'tool_use',
+        },
+      });
+      processor.registerMessageTs('toolu_agent1', 'AGENT_MSG_TS');
+
+      // Child tool
+      processor.processEvent({
+        type: 'assistant',
+        parent_tool_use_id: 'toolu_agent1',
+        message: {
+          content: [{
+            type: 'tool_use', id: 'toolu_child1', name: 'Read',
+            input: { file_path: '/src/a.ts' },
+          }],
+          stop_reason: 'tool_use',
+        },
+      });
+
+      // Should emit update to subagent message, not new postMessage
+      const updates = emittedActions.filter(a => a.type === 'update' && a.metadata.messageType === 'subagent');
+      expect(updates.length).toBeGreaterThanOrEqual(1);
+      expect(updates[0].messageTs).toBe('AGENT_MSG_TS');
+    });
+
+    it('routes child tool results to subagent update', () => {
+      // Register agent
+      processor.processEvent({
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: {
+          content: [{
+            type: 'tool_use', id: 'toolu_agent2', name: 'Agent',
+            input: { prompt: 'Analyze code' },
+          }],
+          stop_reason: 'tool_use',
+        },
+      });
+      processor.registerMessageTs('toolu_agent2', 'AGENT_MSG_TS2');
+
+      // Child tool
+      processor.processEvent({
+        type: 'assistant',
+        parent_tool_use_id: 'toolu_agent2',
+        message: {
+          content: [{
+            type: 'tool_use', id: 'toolu_child2', name: 'Grep',
+            input: { pattern: 'auth' },
+          }],
+          stop_reason: 'tool_use',
+        },
+      });
+
+      // Child tool result
+      processor.processEvent({
+        type: 'user',
+        parent_tool_use_id: 'toolu_agent2',
+        message: {
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'toolu_child2',
+            content: 'found 3 matches',
+          }],
+        },
+      });
+
+      const updates = emittedActions.filter(a => a.type === 'update' && a.metadata.messageType === 'subagent');
+      // Should have at least 2 updates: one for child tool start, one for child tool result
+      expect(updates.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   describe('error detection in tool_result', () => {
     it('detects is_error flag', () => {
       processor.processEvent({
