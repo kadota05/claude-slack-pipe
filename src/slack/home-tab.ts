@@ -1,4 +1,4 @@
-import { buildHomeTabBlocksV2 } from './block-builder.js';
+import { buildHomeTabBlocks } from './block-builder.js';
 import { logger } from '../utils/logger.js';
 
 export class HomeTabHandler {
@@ -36,7 +36,7 @@ export class HomeTabHandler {
     const totalSessions = activeSessions.length + endedSessions.length;
     const totalPages = Math.max(1, Math.ceil(totalSessions / sessionsPerPage));
 
-    const blocks = buildHomeTabBlocksV2({
+    const blocks = buildHomeTabBlocks({
       model: prefs.defaultModel,
       directoryId: prefs.activeDirectoryId,
       directories,

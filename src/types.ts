@@ -1,5 +1,3 @@
-import type { ChildProcess } from 'node:child_process';
-
 // ============================================================
 // 5.1 Session Metadata
 // ============================================================
@@ -20,32 +18,6 @@ export interface SessionMetadata {
   totalInputTokens: number;
   totalOutputTokens: number;
   lastActiveAt: Date;
-  anchorCollapsed: boolean;
-}
-
-// ============================================================
-// 5.2 Process Management
-// ============================================================
-
-export interface ProcessManagerConfig {
-  maxConcurrentPerUser: number;
-  maxConcurrentGlobal: number;
-  defaultTimeoutMs: number;
-  maxTimeoutMs: number;
-  defaultBudgetUsd: number;
-  maxBudgetUsd: number;
-}
-
-export interface ManagedProcess {
-  sessionId: string;
-  userId: string;
-  channelId: string;
-  projectId: string;
-  process: ChildProcess;
-  startedAt: Date;
-  timeoutTimer: NodeJS.Timeout;
-  status: 'running' | 'completing' | 'cancelled' | 'timed-out';
-  budgetUsd: number;
 }
 
 // ============================================================
@@ -97,15 +69,8 @@ export interface ToolUseSummary {
 }
 
 // ============================================================
-// 5.4 Command Parser
+// 5.4 Command Parser (see src/slack/command-parser.ts for ParsedCommand)
 // ============================================================
-
-export interface ParsedCommand {
-  type: 'claude_command' | 'bridge_command' | 'plain_text';
-  command?: string;
-  args?: string;
-  rawText: string;
-}
 
 // ============================================================
 // 5.5 Project / Session Info

@@ -1,71 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildAnchorBlocks,
-  buildCollapsedAnchorBlocks,
   buildErrorBlocks,
   buildResultBlocks,
   buildResponseFooter,
   buildThreadHeaderText,
   buildStreamingBlocks,
-  buildHomeTabBlocksV2,
+  buildHomeTabBlocks,
 } from '../../src/slack/block-builder.js';
-import type { SessionMetadata } from '../../src/types.js';
-
-const mockSession: SessionMetadata = {
-  sessionId: 'a1b2c3d4-e5f6-5789-abcd-ef0123456789',
-  threadTs: '1710567000.000100',
-  dmChannelId: 'D123',
-  projectPath: '/Users/user/dev/my-webapp',
-  name: 'my-webapp: implement auth',
-  model: 'opus',
-  status: 'active',
-  startTime: new Date('2026-03-16T14:30:00Z'),
-  totalCost: 0.23,
-  turnCount: 5,
-  totalInputTokens: 45000,
-  totalOutputTokens: 5000,
-  lastActiveAt: new Date(),
-  anchorCollapsed: false,
-};
-
-describe('buildAnchorBlocks', () => {
-  it('should return blocks with header, section, context, model select, actions, hint', () => {
-    const blocks = buildAnchorBlocks(mockSession);
-    expect(blocks.length).toBeGreaterThanOrEqual(6);
-    expect(blocks[0].type).toBe('header');
-    expect(blocks[0].text.text).toContain('my-webapp: implement auth');
-    expect(blocks[1].type).toBe('section');
-    expect(blocks[1].text.text).toContain(':large_green_circle:');
-
-    const modelBlock = blocks.find(
-      (b: any) => b.type === 'section' && b.accessory?.action_id === 'set_model',
-    );
-    expect(modelBlock).toBeDefined();
-    expect(modelBlock.accessory.initial_option.value).toBe('opus');
-
-    const actionsBlock = blocks.find(
-      (b: any) => b.type === 'actions' && b.block_id === 'session_controls',
-    );
-    expect(actionsBlock).toBeDefined();
-    expect(actionsBlock.elements.length).toBe(2);
-  });
-
-  it('should show ended status for ended session', () => {
-    const endedSession = { ...mockSession, status: 'ended' as const };
-    const blocks = buildAnchorBlocks(endedSession);
-    expect(blocks[1].text.text).toContain(':white_circle:');
-  });
-});
-
-describe('buildCollapsedAnchorBlocks', () => {
-  it('should return single section with expand button', () => {
-    const blocks = buildCollapsedAnchorBlocks(mockSession);
-    expect(blocks.length).toBe(1);
-    expect(blocks[0].type).toBe('section');
-    expect(blocks[0].accessory.action_id).toBe('toggle_anchor');
-    expect(blocks[0].accessory.value).toBe('expand');
-  });
-});
 
 describe('buildErrorBlocks', () => {
   it('should build error message with retry button', () => {
@@ -161,7 +102,7 @@ describe('buildStreamingBlocks', () => {
   });
 });
 
-describe('buildHomeTabBlocksV2 (phase2)', () => {
+describe('buildHomeTabBlocks', () => {
   const defaultParams = {
     model: 'sonnet',
     directoryId: 'myapp',
@@ -180,13 +121,13 @@ describe('buildHomeTabBlocksV2 (phase2)', () => {
   };
 
   it('includes header section', () => {
-    const blocks = buildHomeTabBlocksV2(defaultParams);
+    const blocks = buildHomeTabBlocks(defaultParams);
     const header = blocks.find((b: any) => b.type === 'header');
     expect(header).toBeDefined();
   });
 
   it('includes model static_select', () => {
-    const blocks = buildHomeTabBlocksV2(defaultParams);
+    const blocks = buildHomeTabBlocks(defaultParams);
     const modelSection = blocks.find((b: any) =>
       b.accessory?.action_id === 'home_set_default_model'
     );
@@ -194,7 +135,7 @@ describe('buildHomeTabBlocksV2 (phase2)', () => {
   });
 
   it('includes directory static_select', () => {
-    const blocks = buildHomeTabBlocksV2(defaultParams);
+    const blocks = buildHomeTabBlocks(defaultParams);
     const dirSection = blocks.find((b: any) =>
       b.accessory?.action_id === 'home_set_directory'
     );
@@ -202,7 +143,7 @@ describe('buildHomeTabBlocksV2 (phase2)', () => {
   });
 
   it('includes usage guide section', () => {
-    const blocks = buildHomeTabBlocksV2(defaultParams);
+    const blocks = buildHomeTabBlocks(defaultParams);
     const found = blocks.some((b: any) =>
       b.text?.text?.includes('Usage Guide') || b.text?.text?.includes('usage') || b.text?.text?.includes('Usage')
     );
@@ -210,7 +151,7 @@ describe('buildHomeTabBlocksV2 (phase2)', () => {
   });
 
   it('includes active session', () => {
-    const blocks = buildHomeTabBlocksV2(defaultParams);
+    const blocks = buildHomeTabBlocks(defaultParams);
     const found = blocks.some((b: any) =>
       JSON.stringify(b).includes('fix-auth-bug')
     );
@@ -218,12 +159,12 @@ describe('buildHomeTabBlocksV2 (phase2)', () => {
   });
 
   it('stays within 100 block limit', () => {
-    const blocks = buildHomeTabBlocksV2(defaultParams);
+    const blocks = buildHomeTabBlocks(defaultParams);
     expect(blocks.length).toBeLessThanOrEqual(100);
   });
 
   it('includes pagination when totalPages > 1', () => {
-    const blocks = buildHomeTabBlocksV2({ ...defaultParams, totalPages: 3, page: 1 });
+    const blocks = buildHomeTabBlocks({ ...defaultParams, totalPages: 3, page: 1 });
     const found = blocks.some((b: any) =>
       JSON.stringify(b).includes('session_page_next') || JSON.stringify(b).includes('session_page_prev')
     );
