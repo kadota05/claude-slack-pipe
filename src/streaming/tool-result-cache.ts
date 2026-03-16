@@ -15,6 +15,28 @@ interface CacheEntry {
   sizeBytes: number;
 }
 
+export interface GroupCacheData {
+  category: 'thinking' | 'tool' | 'subagent';
+  thinkingTexts?: string[];
+  tools?: Array<{
+    toolUseId: string;
+    toolName: string;
+    input: Record<string, unknown>;
+    oneLiner: string;
+    durationMs?: number;
+    isError?: boolean;
+  }>;
+  agentDescription?: string;
+  agentId?: string;
+  sessionId?: string;
+  projectPath?: string;
+}
+
+interface GroupCacheEntry {
+  data: GroupCacheData;
+  createdAt: number;
+}
+
 interface ToolResultCacheConfig {
   ttlMs: number;        // 30 * 60 * 1000 = 30 minutes
   maxSizeBytes: number;  // 50 * 1024 * 1024 = 50MB
@@ -22,6 +44,7 @@ interface ToolResultCacheConfig {
 
 export class ToolResultCache {
   private entries: Map<string, CacheEntry> = new Map();
+  private groupEntries: Map<string, GroupCacheEntry> = new Map();
   private totalBytes = 0;
   private readonly config: ToolResultCacheConfig;
 
@@ -68,8 +91,23 @@ export class ToolResultCache {
     return entry.data;
   }
 
+  setGroupData(groupId: string, data: GroupCacheData): void {
+    this.groupEntries.set(groupId, { data, createdAt: Date.now() });
+  }
+
+  getGroupData(groupId: string): GroupCacheData | undefined {
+    const entry = this.groupEntries.get(groupId);
+    if (!entry) return undefined;
+    if (Date.now() - entry.createdAt > this.config.ttlMs) {
+      this.groupEntries.delete(groupId);
+      return undefined;
+    }
+    return entry.data;
+  }
+
   clear(): void {
     this.entries.clear();
+    this.groupEntries.clear();
     this.totalBytes = 0;
   }
 

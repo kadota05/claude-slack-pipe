@@ -73,3 +73,31 @@ describe('ToolResultCache', () => {
     expect(cache.get('toolu_001')).toBeUndefined();
   });
 });
+
+describe('group data cache', () => {
+  it('stores and retrieves group data', () => {
+    const cache = new ToolResultCache({ ttlMs: 60000, maxSizeBytes: 1024 * 1024 });
+    cache.setGroupData('grp-1', {
+      category: 'thinking',
+      thinkingTexts: ['First thought', 'Second thought'],
+    });
+    const data = cache.getGroupData('grp-1');
+    expect(data).toBeDefined();
+    expect(data!.thinkingTexts).toEqual(['First thought', 'Second thought']);
+  });
+
+  it('returns undefined for missing group', () => {
+    const cache = new ToolResultCache({ ttlMs: 60000, maxSizeBytes: 1024 * 1024 });
+    expect(cache.getGroupData('nonexistent')).toBeUndefined();
+  });
+
+  it('respects TTL for group data', () => {
+    vi.useFakeTimers();
+    const cache = new ToolResultCache({ ttlMs: 1000, maxSizeBytes: 1024 * 1024 });
+    cache.setGroupData('grp-1', { category: 'thinking', thinkingTexts: ['test'] });
+
+    vi.advanceTimersByTime(1001);
+    expect(cache.getGroupData('grp-1')).toBeUndefined();
+    vi.useRealTimers();
+  });
+});
