@@ -191,41 +191,43 @@ export function buildSubagentModal(
   };
 }
 
-export function buildBundleDetailModal(entries: BundleEntry[], sessionId: string): any {
+export function buildBundleDetailModal(entries: BundleEntry[], sessionId: string, bundleIndex: number): any {
   const blocks: Block[] = [];
+  const buttons: Block[] = [];
+  let thinkingIndex = 0;
 
-  for (const [i, entry] of entries.entries()) {
-    if (i > 0) blocks.push({ type: 'divider' });
-
+  for (const entry of entries) {
     if (entry.type === 'thinking') {
-      const preview = truncate(entry.texts.join(' '), 50);
-      blocks.push({
-        type: 'section',
-        text: { type: 'mrkdwn', text: `💭 _${preview}_` },
+      const preview = truncate(entry.texts.join(' '), 40);
+      buttons.push({
+        type: 'button',
+        text: { type: 'plain_text', text: truncate(`💭 ${preview}`, 72) },
+        action_id: `view_thinking_detail:${sessionId}:${bundleIndex}:${thinkingIndex}`,
       });
+      thinkingIndex++;
     } else if (entry.type === 'tool') {
       const durationStr = `${(entry.durationMs / 1000).toFixed(1)}s`;
-      blocks.push({
-        type: 'section',
-        text: { type: 'mrkdwn', text: `🔧 \`${entry.toolName}\` ${entry.oneLiner} (${durationStr})` },
-        accessory: {
-          type: 'button',
-          text: { type: 'plain_text', text: '詳細を見る' },
-          action_id: `view_tool_detail:${sessionId}:${entry.toolUseId}`,
-        },
+      buttons.push({
+        type: 'button',
+        text: { type: 'plain_text', text: truncate(`🔧 ${entry.toolName} ${entry.oneLiner} (${durationStr})`, 72) },
+        action_id: `view_tool_detail:${sessionId}:${entry.toolUseId}`,
       });
     } else if (entry.type === 'subagent') {
       const durationStr = `${(entry.durationMs / 1000).toFixed(1)}s`;
-      blocks.push({
-        type: 'section',
-        text: { type: 'mrkdwn', text: `🤖 SubAgent: "${entry.description}" (${durationStr})` },
-        accessory: {
-          type: 'button',
-          text: { type: 'plain_text', text: '詳細を見る' },
-          action_id: `view_subagent_detail:${sessionId}:${entry.toolUseId}`,
-        },
+      buttons.push({
+        type: 'button',
+        text: { type: 'plain_text', text: truncate(`🤖 SubAgent: "${entry.description}" (${durationStr})`, 72) },
+        action_id: `view_subagent_detail:${sessionId}:${entry.toolUseId}`,
       });
     }
+  }
+
+  // Split buttons into actions blocks (max 25 per block)
+  for (let i = 0; i < buttons.length; i += 25) {
+    blocks.push({
+      type: 'actions',
+      elements: buttons.slice(i, i + 25),
+    });
   }
 
   return {

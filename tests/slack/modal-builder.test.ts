@@ -155,54 +155,73 @@ describe('buildToolGroupModal', () => {
 });
 
 describe('buildBundleDetailModal', () => {
-  it('renders thinking entry with text preview', () => {
+  it('renders thinking entry as button', () => {
     const entries: BundleEntry[] = [
-      { type: 'thinking', texts: ['Let me analyze the file structure and find...'] },
+      { type: 'thinking', texts: ['Let me analyze the file structure...'] },
     ];
-    const modal = buildBundleDetailModal(entries, 'sess-1');
+    const modal = buildBundleDetailModal(entries, 'sess-1', 0);
     expect(modal.type).toBe('modal');
-    const blockTexts = JSON.stringify(modal.blocks);
-    expect(blockTexts).toContain('💭');
-    expect(blockTexts).toContain('Let me analyze');
+    const actionsBlocks = modal.blocks.filter((b: any) => b.type === 'actions');
+    expect(actionsBlocks.length).toBeGreaterThan(0);
+    const buttons = actionsBlocks.flatMap((b: any) => b.elements);
+    expect(buttons[0].action_id).toBe('view_thinking_detail:sess-1:0:0');
+    expect(buttons[0].text.text).toContain('💭');
   });
 
-  it('renders tool entry with detail button', () => {
+  it('renders tool entry as button with action_id', () => {
     const entries: BundleEntry[] = [
       { type: 'tool', toolUseId: 'toolu_001', toolName: 'Read', oneLiner: 'src/auth.ts', durationMs: 200 },
     ];
-    const modal = buildBundleDetailModal(entries, 'sess-1');
-    const blockTexts = JSON.stringify(modal.blocks);
-    expect(blockTexts).toContain('Read');
-    expect(blockTexts).toContain('view_tool_detail:sess-1:toolu_001');
+    const modal = buildBundleDetailModal(entries, 'sess-1', 0);
+    const actionsBlocks = modal.blocks.filter((b: any) => b.type === 'actions');
+    const buttons = actionsBlocks.flatMap((b: any) => b.elements);
+    expect(buttons[0].action_id).toBe('view_tool_detail:sess-1:toolu_001');
+    expect(buttons[0].text.text).toContain('🔧');
+    expect(buttons[0].text.text).toContain('Read');
   });
 
-  it('renders subagent entry with detail button', () => {
+  it('renders subagent entry as button with action_id', () => {
     const entries: BundleEntry[] = [
       { type: 'subagent', toolUseId: 'toolu_agent', description: 'コード探索', agentId: 'abc', durationMs: 3000 },
     ];
-    const modal = buildBundleDetailModal(entries, 'sess-1');
-    const blockTexts = JSON.stringify(modal.blocks);
-    expect(blockTexts).toContain('🤖');
-    expect(blockTexts).toContain('コード探索');
-    expect(blockTexts).toContain('view_subagent_detail:sess-1:toolu_agent');
+    const modal = buildBundleDetailModal(entries, 'sess-1', 0);
+    const actionsBlocks = modal.blocks.filter((b: any) => b.type === 'actions');
+    const buttons = actionsBlocks.flatMap((b: any) => b.elements);
+    expect(buttons[0].action_id).toBe('view_subagent_detail:sess-1:toolu_agent');
+    expect(buttons[0].text.text).toContain('🤖');
   });
 
-  it('renders mixed entries in order with dividers', () => {
+  it('truncates button text to 75 chars max', () => {
+    const entries: BundleEntry[] = [
+      { type: 'tool', toolUseId: 'toolu_001', toolName: 'Read', oneLiner: 'a'.repeat(100), durationMs: 200 },
+    ];
+    const modal = buildBundleDetailModal(entries, 'sess-1', 0);
+    const actionsBlocks = modal.blocks.filter((b: any) => b.type === 'actions');
+    const buttons = actionsBlocks.flatMap((b: any) => b.elements);
+    expect(buttons[0].text.text.length).toBeLessThanOrEqual(75);
+  });
+
+  it('assigns correct thinkingIndex for multiple thinking entries', () => {
+    const entries: BundleEntry[] = [
+      { type: 'thinking', texts: ['first'] },
+      { type: 'tool', toolUseId: 'toolu_001', toolName: 'Read', oneLiner: 'a.ts', durationMs: 100 },
+      { type: 'thinking', texts: ['second'] },
+    ];
+    const modal = buildBundleDetailModal(entries, 'sess-1', 2);
+    const actionsBlocks = modal.blocks.filter((b: any) => b.type === 'actions');
+    const buttons = actionsBlocks.flatMap((b: any) => b.elements);
+    expect(buttons[0].action_id).toBe('view_thinking_detail:sess-1:2:0');
+    expect(buttons[1].action_id).toBe('view_tool_detail:sess-1:toolu_001');
+    expect(buttons[2].action_id).toBe('view_thinking_detail:sess-1:2:1');
+  });
+
+  it('does not include header block', () => {
     const entries: BundleEntry[] = [
       { type: 'thinking', texts: ['hmm'] },
-      { type: 'tool', toolUseId: 'toolu_001', toolName: 'Read', oneLiner: 'a.ts', durationMs: 100 },
-      { type: 'tool', toolUseId: 'toolu_002', toolName: 'Bash', oneLiner: 'ls', durationMs: 500 },
     ];
-    const modal = buildBundleDetailModal(entries, 'sess-1');
-    expect(modal.blocks.length).toBeGreaterThanOrEqual(4);
-  });
-
-  it('does not include a header block in body', () => {
-    const entries: BundleEntry[] = [
-      { type: 'thinking', texts: ['some thought'] },
-    ];
-    const modal = buildBundleDetailModal(entries, 'sess-1');
-    expect(modal.blocks.filter((b: any) => b.type === 'header')).toHaveLength(0);
+    const modal = buildBundleDetailModal(entries, 'sess-1', 0);
+    const headerBlocks = modal.blocks.filter((b: any) => b.type === 'header');
+    expect(headerBlocks).toHaveLength(0);
   });
 });
 
