@@ -17,6 +17,7 @@ export interface BuildArgsSession {
 
 export interface BuildArgsOptions {
   budgetUsd?: number;
+  replayUserMessages?: boolean;
 }
 
 const MODEL_MAP: Record<ModelChoice, string> = {
@@ -45,6 +46,10 @@ export function buildClaudeArgs(
 
   if (opts?.budgetUsd !== undefined) {
     args.push('--max-budget-usd', String(opts.budgetUsd));
+  }
+
+  if (opts?.replayUserMessages) {
+    args.push('--replay-user-messages');
   }
 
   return args;
