@@ -398,10 +398,9 @@ async function main(): Promise<void> {
             logger.info(`[${session.sessionId}] result event received`);
 
             const usage = resultEvent.usage || {};
-            const contextTokens = (usage.input_tokens || 0)
+            const inputTotal = (usage.input_tokens || 0)
               + (usage.cache_read_input_tokens || 0)
-              + (usage.cache_creation_input_tokens || 0)
-              + (usage.output_tokens || 0);
+              + (usage.cache_creation_input_tokens || 0);
 
             const sessionModel = indexStore.findByThreadTs(threadTs)?.model || '';
             const contextWindow = sessionModel.includes('haiku') ? 200_000 : 1_000_000;
@@ -409,7 +408,7 @@ async function main(): Promise<void> {
             const footerBlocks = buildResponseFooter({
               inputTokens: usage.input_tokens || 0,
               outputTokens: usage.output_tokens || 0,
-              contextTokens,
+              contextUsed: inputTotal,
               contextWindow,
               model: indexStore.findByThreadTs(threadTs)?.model || 'unknown',
               durationMs: resultEvent.duration_ms || 0,
@@ -468,16 +467,20 @@ async function main(): Promise<void> {
     await homeTabHandler.publishHomeTab(event.user);
   });
 
-  // Interrupt via reaction
+  // Interrupt via reaction — only targets messages currently being processed
   app.event('reaction_added', async ({ event }) => {
     if ((event as any).reaction !== 'red_circle') return;
     const item = (event as any).item;
     if (!item?.ts) return;
-    const entry = sessionIndexStore.findByThreadTs(item.ts);
-    if (!entry) return;
-    const session = coordinator.getSession(entry.cliSessionId);
-    if (session && session.state === 'processing') {
-      session.sendControl({ type: 'control', subtype: 'interrupt' });
+    // Find session by matching activeMessageTs values
+    for (const [sessionId, msgTs] of activeMessageTs) {
+      if (msgTs === item.ts) {
+        const session = coordinator.getSession(sessionId);
+        if (session && session.state === 'processing') {
+          session.sendControl({ type: 'control', subtype: 'interrupt' });
+        }
+        break;
+      }
     }
   });
 
