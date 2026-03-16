@@ -74,6 +74,7 @@ import type { SessionCoordinator } from '../bridge/session-coordinator.js';
 import type { SessionIndexStore } from '../store/session-index-store.js';
 import type { AuthMiddleware } from '../middleware/auth.js';
 import type { RateLimiter } from '../middleware/rate-limiter.js';
+import { sanitizeUserInput } from '../utils/sanitizer.js';
 
 const SLASH_COMMANDS = [
   'compact', 'memory', 'cost', 'permissions',
@@ -89,43 +90,51 @@ export function registerSlashCommands(
 ): void {
   for (const cmd of SLASH_COMMANDS) {
     app.command(`/${cmd}`, async ({ command, ack }) => {
-      // Auth check
-      if (!auth.isAllowed(command.user_id, command.team_id)) {
-        await ack({ text: 'You are not authorized.' });
-        return;
+      try {
+        // Auth check
+        if (!auth.isAllowed(command.user_id, command.team_id)) {
+          await ack({ text: 'You are not authorized.' });
+          return;
+        }
+
+        // Rate limit check
+        const rateResult = rateLimiter.check(command.user_id);
+        if (!rateResult.allowed) {
+          const waitSec = Math.ceil((rateResult.retryAfterMs || 0) / 1000);
+          await ack({ text: `Rate limit exceeded. Please wait ${waitSec}s.` });
+          return;
+        }
+
+        // Find active session for this user
+        // getActive() returns entries sorted by lastActiveAt desc
+        const activeEntries = sessionIndex.getActive()
+          .filter(e => e.userId === command.user_id);
+
+        if (activeEntries.length === 0) {
+          await ack({ text: 'No active session found.' });
+          return;
+        }
+
+        const entry = activeEntries[0];
+        const session = coordinator.getSession(entry.cliSessionId);
+
+        if (!session || session.state === 'dead' || session.state === 'ending') {
+          await ack({ text: 'Session has ended.' });
+          return;
+        }
+
+        if (session.state !== 'idle') {
+          await ack({ text: 'Session is busy. Please wait and try again.' });
+          return;
+        }
+
+        const args = command.text ? ' ' + sanitizeUserInput(command.text) : '';
+        const cliCommand = `/${cmd}${args}`;
+        session.sendPrompt(cliCommand);
+        await ack({ text: `Sent ${cliCommand} to your active session.` });
+      } catch (err) {
+        await ack({ text: 'Internal error processing command.' });
       }
-
-      // Rate limit check
-      if (!rateLimiter.check(command.user_id)) {
-        await ack({ text: 'Rate limit exceeded. Please wait.' });
-        return;
-      }
-
-      // Find active session for this user
-      const activeEntries = sessionIndex.getActive()
-        .filter(e => e.userId === command.user_id);
-
-      if (activeEntries.length === 0) {
-        await ack({ text: 'No active session found.' });
-        return;
-      }
-
-      const entry = activeEntries[0]; // Already sorted by lastActiveAt desc
-      const session = coordinator.getSession(entry.cliSessionId);
-
-      if (!session || session.state === 'dead') {
-        await ack({ text: 'Session has ended.' });
-        return;
-      }
-
-      if (session.state !== 'idle') {
-        await ack({ text: 'Session is busy. Please wait and try again.' });
-        return;
-      }
-
-      const cliCommand = `/${cmd}${command.text ? ' ' + command.text : ''}`;
-      session.sendPrompt(cliCommand);
-      await ack({ text: `Sent ${cliCommand} to your active session.` });
     });
   }
 }
@@ -149,10 +158,11 @@ registerSlashCommands(app, coordinator, sessionIndexStore, auth, rateLimiter);
 |--------|-------------|
 | 成功 | `"Sent /compact to your active session."` |
 | セッションなし | `"No active session found."` |
-| セッションdead | `"Session has ended."` |
+| セッションdead/ending | `"Session has ended."` |
 | セッションbusy | `"Session is busy. Please wait and try again."` |
 | 認証失敗 | `"You are not authorized."` |
-| レートリミット | `"Rate limit exceeded. Please wait."` |
+| レートリミット | `"Rate limit exceeded. Please wait Ns."` (待ち時間付き) |
+| 予期しないエラー | `"Internal error processing command."` |
 
 ### 既存機能との共存
 
@@ -166,7 +176,8 @@ registerSlashCommands(app, coordinator, sessionIndexStore, auth, rateLimiter);
 |--------|------|
 | セッションなし | ephemeralで通知 |
 | セッションbusy (processing) | ephemeralで「待ってください」 |
-| セッションdead | ephemeralで通知 |
+| セッションdead/ending | ephemeralで通知 |
+| 予期しない例外 | try-catchで捕捉、ephemeralで通知 |
 | 認証失敗 | ephemeralで通知 |
 | レートリミット超過 | ephemeralで通知 |
 | `commands` scope未設定 | Slack APIレベルでエラー (管理画面で設定) |
