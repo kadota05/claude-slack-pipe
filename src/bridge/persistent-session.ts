@@ -23,6 +23,7 @@ export class PersistentSession extends EventEmitter {
   private killTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly params: SessionStartParams;
   private stdoutBuffer = '';
+  private _hasPendingInitialPrompt = false;
 
   constructor(params: SessionStartParams) {
     super();
@@ -32,6 +33,10 @@ export class PersistentSession extends EventEmitter {
 
   get state(): SessionState {
     return this._state;
+  }
+
+  get model(): string {
+    return this.params.model;
   }
 
   spawn(): void {
@@ -65,6 +70,9 @@ export class PersistentSession extends EventEmitter {
     this.process.on('error', (err) => this.handleProcessError(err));
   }
 
+  /**
+   * Send prompt to an idle session (normal turn).
+   */
   sendPrompt(prompt: string): void {
     if (this._state !== 'idle') {
       throw new Error(`Cannot send prompt in state: ${this._state}`);
@@ -78,6 +86,26 @@ export class PersistentSession extends EventEmitter {
       },
     });
     this.transition('processing');
+  }
+
+  /**
+   * Send the first prompt while the session is still starting.
+   * Claude CLI stream-json mode requires a user message on stdin
+   * before it emits the system init event.
+   */
+  sendInitialPrompt(prompt: string): void {
+    if (this._state !== 'starting') {
+      throw new Error(`sendInitialPrompt only valid in starting state, got: ${this._state}`);
+    }
+    this._hasPendingInitialPrompt = true;
+    this.writeStdin({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: prompt }],
+      },
+    });
+    logger.info(`[${this.sessionId}] initial prompt written to stdin (before init)`);
   }
 
   sendControl(msg: ControlMessage): void {
@@ -116,6 +144,7 @@ export class PersistentSession extends EventEmitter {
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
       '--verbose',
+      '--include-partial-messages',
       '--model', this.params.model,
       '--max-budget-usd', String(this.params.budgetUsd),
       '--replay-user-messages',
@@ -153,11 +182,21 @@ export class PersistentSession extends EventEmitter {
   }
 
   private handleEvent(event: StreamEvent): void {
+    logger.info(`[${this.sessionId}] event: type=${event.type}, subtype=${event.subtype || 'none'}`);
     this.emit('message', event);
 
     if (event.type === 'system' && event.subtype === 'init') {
-      this.transition('idle');
-      this.startIdleTimer();
+      if (this._hasPendingInitialPrompt) {
+        // Initial prompt was already written — CLI is processing it.
+        // Skip idle and go straight to processing so new messages get queued.
+        this._hasPendingInitialPrompt = false;
+        logger.info(`[${this.sessionId}] system init received with pending prompt, transitioning to processing`);
+        this.transition('processing');
+      } else {
+        logger.info(`[${this.sessionId}] system init received, transitioning to idle`);
+        this.transition('idle');
+        this.startIdleTimer();
+      }
     } else if (event.type === 'result') {
       this.transition('idle');
       this.startIdleTimer();

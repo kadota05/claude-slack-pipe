@@ -8,6 +8,8 @@ import {
   getToolOneLiner,
   getToolResultSummary,
 } from './tool-formatter.js';
+import { TextStreamUpdater } from './text-stream-updater.js';
+import { BatchAggregator } from './batch-aggregator.js';
 import type {
   SlackAction,
   StreamProcessorState,
@@ -22,11 +24,18 @@ interface StreamProcessorConfig {
 export class StreamProcessor extends EventEmitter {
   private state: StreamProcessorState;
   private readonly config: StreamProcessorConfig;
+  private textUpdater: TextStreamUpdater | null = null;
+  private batchAggregator: BatchAggregator;
 
   constructor(config: StreamProcessorConfig) {
     super();
     this.config = config;
     this.state = this.createInitialState();
+    this.batchAggregator = new BatchAggregator({
+      windowMs: 1500,
+      maxWaitMs: 3000,
+      onFlush: (batch) => this.handleBatchFlush(batch),
+    });
   }
 
   getState(): Readonly<StreamProcessorState> {
@@ -40,6 +49,8 @@ export class StreamProcessor extends EventEmitter {
       this.handleUser(event.message.content);
     } else if (event.type === 'result') {
       this.handleResult(event);
+    } else if (event.type === 'stream_event') {
+      this.handleStreamEvent(event);
     }
   }
 
@@ -50,11 +61,39 @@ export class StreamProcessor extends EventEmitter {
     }
   }
 
+  registerTextMessageTs(messageTs: string): void {
+    if (this.textUpdater) {
+      this.textUpdater.setMessageTs(messageTs);
+    }
+  }
+
+  getAccumulatedText(): string {
+    if (this.textUpdater) {
+      return this.textUpdater.getAccumulatedText();
+    }
+    return '';
+  }
+
   reset(): void {
+    if (this.textUpdater) {
+      this.textUpdater.dispose();
+      this.textUpdater = null;
+    }
+    this.batchAggregator.dispose();
+    this.batchAggregator = new BatchAggregator({
+      windowMs: 1500,
+      maxWaitMs: 3000,
+      onFlush: (batch) => this.handleBatchFlush(batch),
+    });
     this.state = this.createInitialState();
   }
 
   dispose(): void {
+    if (this.textUpdater) {
+      this.textUpdater.dispose();
+      this.textUpdater = null;
+    }
+    this.batchAggregator.dispose();
     this.removeAllListeners();
   }
 
@@ -65,7 +104,7 @@ export class StreamProcessor extends EventEmitter {
       } else if (block.type === 'tool_use') {
         this.handleToolUse(block);
       }
-      // text blocks: Phase 1 ignores (handled by existing wireSessionOutput)
+      // text blocks: now handled by stream_event (text deltas)
     }
   }
 
@@ -93,6 +132,7 @@ export class StreamProcessor extends EventEmitter {
     const input = block.input || {};
 
     this.state.cumulativeToolCount++;
+    this.batchAggregator.setCumulativeToolCount(this.state.cumulativeToolCount);
 
     const tracker: ToolUseTracker = {
       toolUseId,
@@ -107,7 +147,8 @@ export class StreamProcessor extends EventEmitter {
 
     const oneLiner = getToolOneLiner(toolName, input);
 
-    this.emitAction({
+    // Route through batch aggregator instead of direct emit
+    this.batchAggregator.submit({
       type: 'postMessage',
       priority: 3,
       channel: this.config.channel,
@@ -173,9 +214,61 @@ export class StreamProcessor extends EventEmitter {
     }
   }
 
+  private handleStreamEvent(wrapper: any): void {
+    const event = wrapper.event;
+    if (!event) return;
+
+    if (event.type === 'content_block_start' && event.content_block?.type === 'text') {
+      // Text block started — create TextStreamUpdater
+      if (!this.textUpdater) {
+        this.textUpdater = new TextStreamUpdater({
+          channel: this.config.channel,
+          threadTs: this.config.threadTs,
+          onAction: (action) => this.emitAction(action),
+          getUpdateUtilization: () => 0.3, // Phase 3 will use real rate limiter
+        });
+        this.state.phase = 'responding';
+      }
+    } else if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+      // Text delta — append to updater
+      if (this.textUpdater && event.delta.text) {
+        this.textUpdater.appendText(event.delta.text);
+      }
+    } else if (event.type === 'content_block_stop') {
+      // Block stopped — if text was streaming, finalize
+      // Note: content_block_stop doesn't identify which block, but we finalize text if active
+    }
+  }
+
+  private handleBatchFlush(batch: SlackAction[]): void {
+    if (batch.length === 1) {
+      this.emitAction(batch[0]);
+    } else {
+      // Merge batch into single message
+      const mergedBlocks: Record<string, unknown>[] = [];
+      const toolNames: string[] = [];
+      for (const action of batch) {
+        if (action.blocks) mergedBlocks.push(...action.blocks);
+        if (action.metadata.toolName) toolNames.push(action.metadata.toolName);
+      }
+      this.emitAction({
+        type: 'postMessage',
+        priority: 3,
+        channel: this.config.channel,
+        threadTs: this.config.threadTs,
+        blocks: mergedBlocks,
+        text: `${batch.length}ツール実行中: ${toolNames.join(', ')}`,
+        metadata: { messageType: 'tool_use' },
+      });
+    }
+  }
+
   private handleResult(event: any): void {
     this.state.phase = 'completed';
-    // Phase 1: forward result event to existing handler in index.ts
+    // Finalize text streaming if active
+    if (this.textUpdater) {
+      this.textUpdater.finalize();
+    }
     this.emit('result', event);
   }
 

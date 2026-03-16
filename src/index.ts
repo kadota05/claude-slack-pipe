@@ -14,8 +14,8 @@ import { HomeTabHandler } from './slack/home-tab.js';
 import { ActionHandler } from './slack/action-handler.js';
 import { parseCommand } from './slack/command-parser.js';
 import { parsePermissionAction } from './slack/permission-prompt.js';
-import { sanitizeUserInput, sanitizeOutput } from './utils/sanitizer.js';
-import { buildResponseFooter, buildThreadHeaderText, buildStreamingBlocks } from './slack/block-builder.js';
+import { sanitizeUserInput } from './utils/sanitizer.js';
+import { buildResponseFooter, buildThreadHeaderText } from './slack/block-builder.js';
 import fs from 'node:fs';
 import type { PersistentSession } from './bridge/persistent-session.js';
 import { StreamProcessor } from './streaming/stream-processor.js';
@@ -335,22 +335,22 @@ async function main(): Promise<void> {
     const streamProcessor = new StreamProcessor({ channel: channelId, threadTs });
     const executor = new SlackActionExecutor(client);
 
-    // Wire StreamProcessor tool actions to Slack executor
+    // Wire StreamProcessor actions to Slack executor
     streamProcessor.on('action', async (action: any) => {
       const result = await executor.execute(action);
-      if (result.ok && result.ts && action.metadata.toolUseId) {
-        streamProcessor.registerMessageTs(action.metadata.toolUseId, result.ts);
+      if (result.ok && result.ts) {
+        if (action.metadata.toolUseId) {
+          streamProcessor.registerMessageTs(action.metadata.toolUseId, result.ts);
+        }
+        if (action.metadata.messageType === 'text' && action.type === 'postMessage') {
+          streamProcessor.registerTextMessageTs(result.ts);
+        }
       }
     });
 
-    // --- Existing text/result handling ---
-    let currentMessageTs: string | null = null;
-    let currentBuffer = '';
-    let pendingPost: Promise<void> | null = null;
-
     session.on('message', async (event: any) => {
       try {
-        // Feed ALL events to StreamProcessor for tool visualization
+        // Feed ALL events to StreamProcessor (handles tools, thinking, and text streaming)
         streamProcessor.processEvent(event);
 
         // Debug: log all events for diagnosis
@@ -359,50 +359,9 @@ async function main(): Promise<void> {
           logger.info(`[${session.sessionId}] assistant event: content_types=[${contentTypes}]`);
         }
 
-        // --- Existing text handling (unchanged) ---
-        if (event.type === 'assistant' && event.message?.content) {
-          let text = '';
-          for (const block of event.message.content) {
-            if (block.type === 'text') {
-              text += block.text;
-            }
-          }
-
-          if (text) {
-            logger.info(`[${session.sessionId}] posting text message (len=${text.length})`);
-            if (pendingPost) await pendingPost;
-
-            if (currentMessageTs) {
-              try {
-                await client.chat.update({
-                  channel: channelId,
-                  ts: currentMessageTs,
-                  blocks: buildStreamingBlocks({ text: currentBuffer, isComplete: true }),
-                  text: currentBuffer.slice(0, 100),
-                });
-              } catch { /* ignore update errors for previous message */ }
-            }
-
-            currentBuffer = sanitizeOutput(text);
-            const blocks = buildStreamingBlocks({ text: currentBuffer, isComplete: false });
-
-            pendingPost = (async () => {
-              const resp = await client.chat.postMessage({
-                channel: channelId,
-                thread_ts: threadTs,
-                blocks,
-                text: currentBuffer.slice(0, 100),
-              });
-              currentMessageTs = resp.ts;
-              pendingPost = null;
-            })();
-          }
-        }
-
-        // --- Existing result handling (unchanged) ---
+        // --- Result handling ---
         if (event.type === 'result') {
-          logger.info(`[${session.sessionId}] result event received, currentMessageTs=${currentMessageTs}, currentBuffer.len=${currentBuffer.length}`);
-          if (pendingPost) await pendingPost;
+          logger.info(`[${session.sessionId}] result event received`);
 
           const usage = event.usage || {};
           const contextTokens = (usage.input_tokens || 0)
@@ -422,28 +381,13 @@ async function main(): Promise<void> {
             durationMs: event.duration_ms || 0,
           });
 
-          if (currentMessageTs) {
-            await client.chat.update({
-              channel: channelId,
-              ts: currentMessageTs,
-              blocks: [
-                { type: 'section', text: { type: 'mrkdwn', text: currentBuffer.slice(0, 3000) } },
-                ...footerBlocks,
-              ],
-              text: currentBuffer.slice(0, 100),
-            });
-          } else {
-            const resultText = sanitizeOutput(event.result || '(no response)');
-            await client.chat.postMessage({
-              channel: channelId,
-              thread_ts: threadTs,
-              blocks: [
-                { type: 'section', text: { type: 'mrkdwn', text: resultText.slice(0, 3000) } },
-                ...footerBlocks,
-              ],
-              text: resultText.slice(0, 100),
-            });
-          }
+          // Post result footer as a new message (text was already displayed by StreamProcessor)
+          await client.chat.postMessage({
+            channel: channelId,
+            thread_ts: threadTs,
+            blocks: footerBlocks,
+            text: 'Complete',
+          });
 
           const msgTs = activeMessageTs.get(session.sessionId) || threadTs;
           await rm.replaceWithDone(channelId, msgTs);
@@ -453,9 +397,6 @@ async function main(): Promise<void> {
             indexStore.findByThreadTs(threadTs)?.cliSessionId || '',
             { lastActiveAt: new Date().toISOString() },
           );
-
-          currentBuffer = '';
-          currentMessageTs = null;
 
           // Reset StreamProcessor for next turn
           streamProcessor.reset();
