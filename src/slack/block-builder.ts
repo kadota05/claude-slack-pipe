@@ -168,11 +168,11 @@ export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
     }] : []),
     // 4. Divider
     { type: 'divider' },
-    // 5. Recent Sessions header (context = small, subtle)
+    // 5. Recent Sessions header
     {
       type: 'context',
       elements: [
-        { type: 'mrkdwn', text: '*Recent Sessions*' },
+        { type: 'mrkdwn', text: '— *Recent Sessions* —' },
       ],
     },
   ];
