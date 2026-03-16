@@ -57,7 +57,7 @@
 
 `buildBundleDetailModal`で、各エントリをsection+accessoryからactionsブロック内のボタンに変更:
 
-- 思考: `💭 思考を表示する...` → action_id: `view_thinking_detail:{sessionId}:{bundleIndex}:{thinkingIndex}`
+- 思考: `💭 {思考内容プレビュー}` → action_id: `view_thinking_detail:{sessionId}:{bundleIndex}:{thinkingIndex}`
 - ツール: `🔧 {toolName} {oneLiner} ({duration})` → action_id: `view_tool_detail:{sessionId}:{toolUseId}`
 - SubAgent: `🤖 SubAgent: "{description}" ({duration})` → action_id: `view_subagent_detail:{sessionId}:{toolUseId}`
 
