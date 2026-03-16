@@ -20,6 +20,8 @@ import fs from 'node:fs';
 import type { PersistentSession } from './bridge/persistent-session.js';
 import { StreamProcessor } from './streaming/stream-processor.js';
 import { SlackActionExecutor } from './streaming/slack-action-executor.js';
+import { ToolResultCache } from './streaming/tool-result-cache.js';
+import { buildToolModal } from './slack/modal-builder.js';
 
 function waitForIdle(session: PersistentSession, timeoutMs = 120000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -49,6 +51,9 @@ async function main(): Promise<void> {
   const projectStore = new ProjectStore(config.claudeProjectsDir);
   const userPrefStore = new UserPreferenceStore(config.dataDir);
   const sessionIndexStore = new SessionIndexStore(config.dataDir);
+
+  // Initialize tool result cache (30min TTL, 50MB max)
+  const toolResultCache = new ToolResultCache({ ttlMs: 30 * 60 * 1000, maxSizeBytes: 50 * 1024 * 1024 });
 
   // Initialize process coordination
   const coordinator = new SessionCoordinator({
@@ -353,6 +358,25 @@ async function main(): Promise<void> {
         // Feed ALL events to StreamProcessor (handles tools, thinking, and text streaming)
         streamProcessor.processEvent(event);
 
+        // Cache tool results for modal display
+        if (event.type === 'user' && event.message?.content) {
+          for (const block of event.message.content) {
+            if (block.type === 'tool_result' && block.tool_use_id) {
+              const tracker = streamProcessor.getState().activeToolUses.get(block.tool_use_id);
+              if (tracker) {
+                toolResultCache.set(block.tool_use_id, {
+                  toolId: block.tool_use_id,
+                  toolName: tracker.toolName,
+                  input: tracker.input,
+                  result: typeof block.content === 'string' ? block.content : JSON.stringify(block.content),
+                  durationMs: tracker.durationMs || 0,
+                  isError: tracker.isError || false,
+                });
+              }
+            }
+          }
+        }
+
         // Debug: log all events for diagnosis
         if (event.type === 'assistant') {
           const contentTypes = (event.message?.content || []).map((b: any) => b.type).join(',');
@@ -519,6 +543,27 @@ async function main(): Promise<void> {
       const session = coordinator.getSession(entry.cliSessionId);
       session?.sendControl({ type: 'control', subtype: 'can_use_tool', tool_use_id: toolUseId, allowed });
     }
+  });
+
+  // --- Tool Detail Modal Action ---
+
+  app.action(/^view_tool_detail:/, async ({ ack, body }: any) => {
+    await ack();
+    const actionId = body.actions?.[0]?.action_id || '';
+    const toolUseId = actionId.split(':')[1];
+    if (!toolUseId) return;
+
+    const cached = toolResultCache.get(toolUseId);
+    if (!cached) {
+      logger.warn(`No cached data for tool ${toolUseId}`);
+      return;
+    }
+
+    const modal = buildToolModal(cached);
+    await app.client.views.open({
+      trigger_id: body.trigger_id,
+      view: modal,
+    });
   });
 
   // --- Start ---

@@ -10,6 +10,8 @@ import {
 } from './tool-formatter.js';
 import { TextStreamUpdater } from './text-stream-updater.js';
 import { BatchAggregator } from './batch-aggregator.js';
+import { SubagentTracker } from './subagent-tracker.js';
+import type { SubagentStep } from './subagent-tracker.js';
 import type {
   SlackAction,
   StreamProcessorState,
@@ -26,11 +28,13 @@ export class StreamProcessor extends EventEmitter {
   private readonly config: StreamProcessorConfig;
   private textUpdater: TextStreamUpdater | null = null;
   private batchAggregator: BatchAggregator;
+  private subagentTracker: SubagentTracker;
 
   constructor(config: StreamProcessorConfig) {
     super();
     this.config = config;
     this.state = this.createInitialState();
+    this.subagentTracker = new SubagentTracker();
     this.batchAggregator = new BatchAggregator({
       windowMs: 1500,
       maxWaitMs: 3000,
@@ -43,10 +47,12 @@ export class StreamProcessor extends EventEmitter {
   }
 
   processEvent(event: any): void {
+    const parentToolUseId = event.parent_tool_use_id || null;
+
     if (event.type === 'assistant' && event.message?.content) {
-      this.handleAssistant(event.message.content, event.message.stop_reason);
+      this.handleAssistant(event.message.content, event.message.stop_reason, parentToolUseId);
     } else if (event.type === 'user' && event.message?.content) {
-      this.handleUser(event.message.content);
+      this.handleUser(event.message.content, parentToolUseId);
     } else if (event.type === 'result') {
       this.handleResult(event);
     } else if (event.type === 'stream_event') {
@@ -58,6 +64,10 @@ export class StreamProcessor extends EventEmitter {
     const tracker = this.state.activeToolUses.get(toolUseId);
     if (tracker) {
       tracker.messageTs = messageTs;
+    }
+    // Also register for subagent messages
+    if (this.subagentTracker.isSubagent(toolUseId)) {
+      this.subagentTracker.setMessageTs(toolUseId, messageTs);
     }
   }
 
@@ -85,6 +95,7 @@ export class StreamProcessor extends EventEmitter {
       maxWaitMs: 3000,
       onFlush: (batch) => this.handleBatchFlush(batch),
     });
+    this.subagentTracker = new SubagentTracker();
     this.state = this.createInitialState();
   }
 
@@ -97,12 +108,12 @@ export class StreamProcessor extends EventEmitter {
     this.removeAllListeners();
   }
 
-  private handleAssistant(content: any[], stopReason: string | null): void {
+  private handleAssistant(content: any[], stopReason: string | null, parentToolUseId: string | null): void {
     for (const block of content) {
       if (block.type === 'thinking') {
         this.handleThinking(block.thinking);
       } else if (block.type === 'tool_use') {
-        this.handleToolUse(block);
+        this.handleToolUse(block, parentToolUseId);
       }
       // text blocks: now handled by stream_event (text deltas)
     }
@@ -126,7 +137,7 @@ export class StreamProcessor extends EventEmitter {
     }
   }
 
-  private handleToolUse(block: any): void {
+  private handleToolUse(block: any, parentToolUseId: string | null): void {
     const toolUseId = block.id;
     const toolName = block.name;
     const input = block.input || {};
@@ -143,11 +154,52 @@ export class StreamProcessor extends EventEmitter {
       status: 'running',
     };
     this.state.activeToolUses.set(toolUseId, tracker);
-    this.state.phase = 'tool_executing';
 
     const oneLiner = getToolOneLiner(toolName, input);
 
-    // Route through batch aggregator instead of direct emit
+    // Check if this is a subagent's child tool
+    if (parentToolUseId && this.subagentTracker.isChildOf(parentToolUseId)) {
+      // Add step to parent subagent, update parent message
+      this.subagentTracker.addStep(parentToolUseId, {
+        toolName,
+        toolUseId,
+        oneLiner,
+        status: 'running',
+      });
+      this.emitSubagentUpdate(parentToolUseId);
+      return;
+    }
+
+    // Check if this IS an Agent tool (starting a new subagent)
+    if (toolName === 'Agent') {
+      const description = String(input.prompt || input.description || 'Subagent');
+      this.subagentTracker.registerAgent(toolUseId, description);
+      this.state.phase = 'tool_executing';
+
+      // Post independent subagent message
+      this.emitAction({
+        type: 'postMessage',
+        priority: 3,
+        channel: this.config.channel,
+        threadTs: this.config.threadTs,
+        blocks: [
+          {
+            type: 'section',
+            text: { type: 'mrkdwn', text: `:robot_face: *Agent* — ${escapeForMrkdwn(truncate(description, 60))}` },
+          },
+          {
+            type: 'context',
+            elements: [{ type: 'mrkdwn', text: '実行中...' }],
+          },
+        ],
+        text: `Agent: ${description}`,
+        metadata: { messageType: 'subagent', toolUseId, toolName: 'Agent' },
+      });
+      return;
+    }
+
+    // Normal tool — route through batch aggregator
+    this.state.phase = 'tool_executing';
     this.batchAggregator.submit({
       type: 'postMessage',
       priority: 3,
@@ -163,15 +215,58 @@ export class StreamProcessor extends EventEmitter {
     });
   }
 
-  private handleUser(content: any[]): void {
+  private emitSubagentUpdate(agentToolUseId: string): void {
+    const messageTs = this.subagentTracker.getMessageTs(agentToolUseId);
+    if (!messageTs) return;
+
+    const description = this.subagentTracker.getAgentDescription(agentToolUseId) || 'Subagent';
+    const { visibleSteps, hiddenCount } = this.subagentTracker.getDisplaySteps(agentToolUseId, 5);
+
+    const stepLines = visibleSteps.map(step => {
+      const icon = step.status === 'completed' ? ':white_check_mark:' : step.status === 'error' ? ':x:' : ':hourglass_flowing_sand:';
+      return `${icon} \`${step.toolName}\` ${escapeForMrkdwn(step.oneLiner)}`;
+    });
+
+    if (hiddenCount > 0) {
+      stepLines.unshift(`_... 他${hiddenCount}ツール完了_`);
+    }
+
+    const blocks = [
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: `:robot_face: *Agent* — ${escapeForMrkdwn(truncate(description, 60))}` },
+      },
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: stepLines.join('\n') },
+      },
+      {
+        type: 'context',
+        elements: [{ type: 'mrkdwn', text: `${visibleSteps.length + hiddenCount}ステップ実行中...` }],
+      },
+    ];
+
+    this.emitAction({
+      type: 'update',
+      priority: 4,
+      channel: this.config.channel,
+      threadTs: this.config.threadTs,
+      messageTs,
+      blocks,
+      text: `Agent: ${description}`,
+      metadata: { messageType: 'subagent', toolUseId: agentToolUseId, toolName: 'Agent' },
+    });
+  }
+
+  private handleUser(content: any[], parentToolUseId: string | null): void {
     for (const block of content) {
       if (typeof block === 'object' && block.type === 'tool_result') {
-        this.handleToolResult(block);
+        this.handleToolResult(block, parentToolUseId);
       }
     }
   }
 
-  private handleToolResult(block: any): void {
+  private handleToolResult(block: any, parentToolUseId: string | null): void {
     const toolUseId = block.tool_use_id;
     const tracker = this.state.activeToolUses.get(toolUseId);
     if (!tracker) {
@@ -192,6 +287,14 @@ export class StreamProcessor extends EventEmitter {
     tracker.isError = isError;
     tracker.result = resultText;
 
+    // Check if this is a subagent child tool result
+    if (parentToolUseId && this.subagentTracker.isChildOf(parentToolUseId)) {
+      this.subagentTracker.updateStepStatus(parentToolUseId, toolUseId, isError ? 'error' : 'completed');
+      this.emitSubagentUpdate(parentToolUseId);
+      return;
+    }
+
+    // Normal tool result — update the tool message
     if (tracker.messageTs) {
       const resultSummary = getToolResultSummary(tracker.toolName, resultText, isError);
       const oneLiner = getToolOneLiner(tracker.toolName, tracker.input);
@@ -203,7 +306,7 @@ export class StreamProcessor extends EventEmitter {
         channel: this.config.channel,
         threadTs: this.config.threadTs,
         messageTs: tracker.messageTs,
-        blocks: buildToolCompletedBlocks(tracker.toolName, displayText, durationMs, isError),
+        blocks: buildToolCompletedBlocks(tracker.toolName, displayText, durationMs, isError, toolUseId),
         text: `${tracker.toolName}: ${displayText}`,
         metadata: {
           messageType: 'tool_use',
@@ -289,4 +392,13 @@ export class StreamProcessor extends EventEmitter {
       turnStartTime: Date.now(),
     };
   }
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max) + '...';
+}
+
+function escapeForMrkdwn(s: string): string {
+  return s.replace(/[`]/g, "'");
 }

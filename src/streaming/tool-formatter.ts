@@ -45,17 +45,30 @@ export function buildToolCompletedBlocks(
   resultSummary: string,
   durationMs: number,
   isError = false,
+  toolUseId?: string,
 ): Block[] {
   const icon = isError ? ':x:' : ':white_check_mark:';
   const durationStr = `${(durationMs / 1000).toFixed(1)}s`;
-  return [
-    {
-      type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `${icon} \`${toolName}\` ${escapeMarkdown(resultSummary)}`,
-      },
+
+  const sectionBlock: Block = {
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: `${icon} \`${toolName}\` ${escapeMarkdown(resultSummary)}`,
     },
+  };
+
+  // Add detail button if toolUseId provided
+  if (toolUseId) {
+    sectionBlock.accessory = {
+      type: 'button',
+      text: { type: 'plain_text', text: '詳細' },
+      action_id: `view_tool_detail:${toolUseId}`,
+    };
+  }
+
+  return [
+    sectionBlock,
     {
       type: 'context',
       elements: [{ type: 'mrkdwn', text: `完了 (${durationStr})` }],
