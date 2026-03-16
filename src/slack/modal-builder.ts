@@ -1,6 +1,7 @@
 // src/slack/modal-builder.ts
 import type { Block } from '../streaming/types.js';
 import type { SubagentConversationFlow } from '../streaming/subagent-jsonl-reader.js';
+import type { BundleEntry } from '../streaming/session-jsonl-reader.js';
 
 interface ToolModalConfig {
   toolId: string;
@@ -112,11 +113,14 @@ export function buildToolGroupModal(tools: ToolGroupModalItem[]): any {
         type: 'mrkdwn',
         text: `${icon} \`${tool.toolName}\` ${tool.oneLiner} (${durationStr})`,
       },
-      accessory: {
+    });
+    blocks.push({
+      type: 'actions',
+      elements: [{
         type: 'button',
-        text: { type: 'plain_text', text: '詳細' },
+        text: { type: 'plain_text', text: '詳細を見る' },
         action_id: `view_tool_detail:${tool.toolUseId}`,
-      },
+      }],
     });
   }
 
@@ -201,6 +205,53 @@ export function buildSubagentModal(
   return {
     type: 'modal',
     title: { type: 'plain_text', text: 'SubAgent詳細' },
+    close: { type: 'plain_text', text: '閉じる' },
+    blocks: blocks.slice(0, 100),
+  };
+}
+
+export function buildBundleDetailModal(entries: BundleEntry[], sessionId: string): any {
+  const blocks: Block[] = [
+    { type: 'header', text: { type: 'plain_text', text: 'アクション詳細' } },
+  ];
+
+  for (const [i, entry] of entries.entries()) {
+    if (i > 0) blocks.push({ type: 'divider' });
+
+    if (entry.type === 'thinking') {
+      const preview = truncate(entry.texts.join(' '), 50);
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: `💭 _${preview}_` },
+      });
+    } else if (entry.type === 'tool') {
+      const durationStr = `${(entry.durationMs / 1000).toFixed(1)}s`;
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: `🔧 \`${entry.toolName}\` ${entry.oneLiner} (${durationStr})` },
+        accessory: {
+          type: 'button',
+          text: { type: 'plain_text', text: '詳細を見る' },
+          action_id: `view_tool_detail:${sessionId}:${entry.toolUseId}`,
+        },
+      });
+    } else if (entry.type === 'subagent') {
+      const durationStr = `${(entry.durationMs / 1000).toFixed(1)}s`;
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: `🤖 SubAgent: "${entry.description}" (${durationStr})` },
+        accessory: {
+          type: 'button',
+          text: { type: 'plain_text', text: '詳細を見る' },
+          action_id: `view_subagent_detail:${sessionId}:${entry.toolUseId}`,
+        },
+      });
+    }
+  }
+
+  return {
+    type: 'modal',
+    title: { type: 'plain_text', text: 'アクション詳細' },
     close: { type: 'plain_text', text: '閉じる' },
     blocks: blocks.slice(0, 100),
   };

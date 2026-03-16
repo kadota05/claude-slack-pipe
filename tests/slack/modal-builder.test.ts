@@ -1,6 +1,7 @@
 // tests/slack/modal-builder.test.ts
 import { describe, it, expect } from 'vitest';
-import { buildToolModal, buildThinkingModal, buildToolGroupModal, buildSubagentModal } from '../../src/slack/modal-builder.js';
+import { buildToolModal, buildThinkingModal, buildToolGroupModal, buildSubagentModal, buildBundleDetailModal } from '../../src/slack/modal-builder.js';
+import type { BundleEntry } from '../../src/streaming/session-jsonl-reader.js';
 
 describe('buildToolModal', () => {
   it('builds modal for Read tool', () => {
@@ -125,6 +126,50 @@ describe('buildToolGroupModal', () => {
     ]);
     const allText = JSON.stringify(modal.blocks);
     expect(allText).toContain(':x:');
+  });
+});
+
+describe('buildBundleDetailModal', () => {
+  it('renders thinking entry with text preview', () => {
+    const entries: BundleEntry[] = [
+      { type: 'thinking', texts: ['Let me analyze the file structure and find...'] },
+    ];
+    const modal = buildBundleDetailModal(entries, 'sess-1');
+    expect(modal.type).toBe('modal');
+    const blockTexts = JSON.stringify(modal.blocks);
+    expect(blockTexts).toContain('💭');
+    expect(blockTexts).toContain('Let me analyze');
+  });
+
+  it('renders tool entry with detail button', () => {
+    const entries: BundleEntry[] = [
+      { type: 'tool', toolUseId: 'toolu_001', toolName: 'Read', oneLiner: 'src/auth.ts', durationMs: 200 },
+    ];
+    const modal = buildBundleDetailModal(entries, 'sess-1');
+    const blockTexts = JSON.stringify(modal.blocks);
+    expect(blockTexts).toContain('Read');
+    expect(blockTexts).toContain('view_tool_detail:sess-1:toolu_001');
+  });
+
+  it('renders subagent entry with detail button', () => {
+    const entries: BundleEntry[] = [
+      { type: 'subagent', toolUseId: 'toolu_agent', description: 'コード探索', agentId: 'abc', durationMs: 3000 },
+    ];
+    const modal = buildBundleDetailModal(entries, 'sess-1');
+    const blockTexts = JSON.stringify(modal.blocks);
+    expect(blockTexts).toContain('🤖');
+    expect(blockTexts).toContain('コード探索');
+    expect(blockTexts).toContain('view_subagent_detail:sess-1:toolu_agent');
+  });
+
+  it('renders mixed entries in order with dividers', () => {
+    const entries: BundleEntry[] = [
+      { type: 'thinking', texts: ['hmm'] },
+      { type: 'tool', toolUseId: 'toolu_001', toolName: 'Read', oneLiner: 'a.ts', durationMs: 100 },
+      { type: 'tool', toolUseId: 'toolu_002', toolName: 'Bash', oneLiner: 'ls', durationMs: 500 },
+    ];
+    const modal = buildBundleDetailModal(entries, 'sess-1');
+    expect(modal.blocks.length).toBeGreaterThanOrEqual(4);
   });
 });
 
