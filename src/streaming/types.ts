@@ -150,10 +150,6 @@ export interface ActiveGroup {
   agentSteps: GroupStepInfo[];
 }
 
-export type GroupAction =
-  | { type: 'postMessage'; groupId: string; blocks: Block[]; text: string; category: GroupCategory }
-  | { type: 'update'; groupId: string; messageTs: string; blocks: Block[]; text: string; category: GroupCategory }
-  | { type: 'collapse'; groupId: string; messageTs: string; blocks: Block[]; text: string; category: GroupCategory };
 
 export interface CompletedGroup {
   category: GroupCategory;
