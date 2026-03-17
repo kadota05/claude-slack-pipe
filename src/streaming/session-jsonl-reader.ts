@@ -77,6 +77,8 @@ export class SessionJsonlReader {
     const agentToolUseIds = new Set<string>();
 
     let textBlockCount = 0;
+    let hasActivityInCurrentSegment = false; // tracks whether thinking/tool/subagent appeared before next text
+    let textBufferLength = 0; // accumulated text length for bundle boundary check
     let lineTimestamp = 0; // use line-order index as proxy for time (no real timestamps in JSONL)
 
     for await (const line of rl) {
@@ -107,10 +109,23 @@ export class SessionJsonlReader {
         if (!block || typeof block !== 'object') continue;
 
         if (block.type === 'text' && role === 'assistant') {
-          // Only assistant text blocks mark bundle boundaries
-          // User text blocks (the initial prompt) should be ignored
-          textBlockCount++;
+          const textLen = typeof block.text === 'string' ? block.text.length : 0;
+          textBufferLength += textLen;
+
+          // Only count as bundle boundary when accumulated text >= 100 chars,
+          // matching the streaming side's textBuffer threshold.
+          if (hasActivityInCurrentSegment && textBufferLength >= 100) {
+            textBlockCount++;
+            hasActivityInCurrentSegment = false;
+            textBufferLength = 0;
+          }
           continue;
+        }
+
+        // Mark activity but do NOT reset textBufferLength —
+        // streaming side accumulates textBuffer across tool calls
+        if (block.type === 'thinking' || block.type === 'tool_use') {
+          hasActivityInCurrentSegment = true;
         }
 
         if (!isCollecting) continue;
