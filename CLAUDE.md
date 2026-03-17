@@ -48,3 +48,8 @@ sleep 2 && npx tsx src/index.ts
 
 - **必ず `run_in_background: true` で起動すること。** Bashツールのtimeoutは最大10分のため、フォアグラウンドで起動するとプロセスが強制killされる。
 - 起動後、ログに `Claude Code Slack Bridge is running` が出ることを確認する
+- **起動直後に `ENOENT` エラーで落ちた場合**: Claude CLIのバージョン不一致が原因の可能性が高い。`/fix-claude-cli-version` スキルに従って対処すること
+
+## セットアップ
+
+ユーザーが「セットアップして」「setup」「セットアップ」等のセットアップ要求をした場合、`/setup` スキルを呼び出すこと。
