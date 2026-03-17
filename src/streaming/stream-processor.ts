@@ -115,19 +115,19 @@ export class StreamProcessor {
   }
 
   private handleText(text: string, result: ProcessedActions): void {
-    // Collapse any active group before text
-    const collapseActions = this.groupTracker.handleTextStart(this.config.sessionId);
-    result.bundleActions.push(...collapseActions);
-
     this.textBuffer += text;
 
-    // Delay initial text post until buffer has enough content.
+    // Buffer short text — don't post or collapse yet.
     // Short intermediate text (e.g. "まず確認してみます。") before tool_use
-    // would otherwise be posted too early and appear above tool messages
-    // in the Slack thread. Buffer until >=100 chars to avoid this.
+    // would otherwise collapse the bundle too early and split ToolSearch →
+    // MCP tool sequences into separate bundles.
     if (!this.textMessageTs && this.textBuffer.length < 100) {
       return;
     }
+
+    // Text is being posted — collapse the active bundle now
+    const collapseActions = this.groupTracker.handleTextStart(this.config.sessionId);
+    result.bundleActions.push(...collapseActions);
 
     const converted = convertMarkdownToMrkdwn(this.textBuffer);
     const blocks = this.buildTextBlocks(converted, false);
