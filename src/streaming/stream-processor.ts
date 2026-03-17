@@ -21,6 +21,7 @@ export class StreamProcessor {
   private readonly groupTracker: GroupTracker;
   private textBuffer = '';
   private textMessageTs: string | null = null;
+  private mainToolUseCount = 0;
 
   constructor(config: StreamProcessorConfig) {
     this.config = config;
@@ -65,6 +66,7 @@ export class StreamProcessor {
   reset(): void {
     this.textBuffer = '';
     this.textMessageTs = null;
+    this.mainToolUseCount = 0;
   }
 
   dispose(): void {
@@ -103,6 +105,7 @@ export class StreamProcessor {
 
     // Agent tool = new subagent
     if (toolName === 'Agent') {
+      this.mainToolUseCount++;
       const description = String(input.description || input.prompt || 'SubAgent');
       const actions = this.groupTracker.handleSubagentStart(toolUseId, description);
       result.bundleActions.push(...actions);
@@ -110,6 +113,7 @@ export class StreamProcessor {
     }
 
     // Normal tool
+    this.mainToolUseCount++;
     const actions = this.groupTracker.handleToolUse(toolUseId, toolName, input);
     result.bundleActions.push(...actions);
   }
@@ -235,6 +239,7 @@ export class StreamProcessor {
     }
 
     result.resultEvent = event;
+    result.mainApiCallCount = this.mainToolUseCount + 1;
   }
 
   private buildTextBlocks(mrkdwn: string, isComplete: boolean): Block[] {

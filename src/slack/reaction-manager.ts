@@ -25,6 +25,11 @@ export class ReactionManager {
     this.lastDone = { channel, ts: timestamp };
   }
 
+  async removeProcessing(channel: string, timestamp: string): Promise<void> {
+    await this.safeRemove(channel, timestamp, 'brain');
+    await this.safeRemove(channel, timestamp, 'hourglass_flowing_sand');
+  }
+
   async addQueued(channel: string, timestamp: string): Promise<void> {
     await this.safeAdd(channel, timestamp, 'hourglass_flowing_sand');
   }

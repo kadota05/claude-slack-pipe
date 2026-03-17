@@ -48,11 +48,11 @@ describe('buildResultBlocks', () => {
 });
 
 describe('buildResponseFooter', () => {
-  it('formats tokens, context, model, and duration', () => {
+  it('formats tokens, ctx, model, and duration', () => {
     const blocks = buildResponseFooter({
       inputTokens: 1200,
       outputTokens: 3400,
-      contextTokens: 55500,
+      contextUsed: 55500,
       contextWindow: 1_000_000,
       model: 'sonnet',
       durationMs: 12300,
@@ -62,18 +62,18 @@ describe('buildResponseFooter', () => {
     const text = (blocks[0] as any).elements[0].text;
     expect(text).toContain('in:1.2k');
     expect(text).toContain('out:3.4k');
-    expect(text).toContain('ctx');
-    expect(text).toContain('1M');
+    expect(text).toContain('ctx 55.5k/1M');
     expect(text).toContain('sonnet');
     expect(text).toContain('12.3s');
   });
 
   it('shows 200k context window for haiku', () => {
     const blocks = buildResponseFooter({
-      inputTokens: 0, outputTokens: 0, contextTokens: 0, contextWindow: 200_000, model: 'haiku', durationMs: 500,
+      inputTokens: 0, outputTokens: 0, contextUsed: 62000, contextWindow: 200_000, model: 'haiku', durationMs: 500,
     });
     const text = (blocks[0] as any).elements[0].text;
     expect(text).toContain('200k');
+    expect(text).toContain('ctx 62.0k/200k(31.0%)');
   });
 });
 
@@ -114,20 +114,17 @@ describe('buildHomeTabBlocks', () => {
       { id: 'myapp', name: 'myapp', path: '/home/user/myapp' },
       { id: 'other', name: 'other', path: '/home/user/other' },
     ],
-    activeSessions: [
-      { cliSessionId: 's1', name: 'fix-auth-bug', lastActiveAt: '2026-03-16T10:00:00Z', model: 'sonnet', status: 'active' as const, threadTs: '123', channelId: 'C001' },
+    recentSessions: [
+      { timeAgo: '2h ago', firstPromptPreview: 'fix-auth-bug', projectPath: '/home/user/myapp' },
     ],
-    endedSessions: [
-      { cliSessionId: 's2', name: 'refactor-api', lastActiveAt: '2026-03-16T08:00:00Z', model: 'opus', status: 'ended' as const, threadTs: '456', channelId: 'C001' },
-    ],
-    page: 0,
-    totalPages: 1,
   };
 
-  it('includes header section', () => {
+  it('includes model selector as first block', () => {
     const blocks = buildHomeTabBlocks(defaultParams);
-    const header = blocks.find((b: any) => b.type === 'header');
-    expect(header).toBeDefined();
+    const modelSection = blocks.find((b: any) =>
+      b.accessory?.action_id === 'home_set_default_model'
+    );
+    expect(modelSection).toBeDefined();
   });
 
   it('includes model static_select', () => {
@@ -146,15 +143,8 @@ describe('buildHomeTabBlocks', () => {
     expect(dirSection).toBeDefined();
   });
 
-  it('includes usage guide section', () => {
-    const blocks = buildHomeTabBlocks(defaultParams);
-    const found = blocks.some((b: any) =>
-      b.text?.text?.includes('Usage Guide') || b.text?.text?.includes('usage') || b.text?.text?.includes('Usage')
-    );
-    expect(found).toBe(true);
-  });
 
-  it('includes active session', () => {
+  it('includes recent session', () => {
     const blocks = buildHomeTabBlocks(defaultParams);
     const found = blocks.some((b: any) =>
       JSON.stringify(b).includes('fix-auth-bug')
@@ -167,10 +157,10 @@ describe('buildHomeTabBlocks', () => {
     expect(blocks.length).toBeLessThanOrEqual(100);
   });
 
-  it('includes pagination when totalPages > 1', () => {
-    const blocks = buildHomeTabBlocks({ ...defaultParams, totalPages: 3, page: 1 });
+  it('shows no recent sessions message when empty', () => {
+    const blocks = buildHomeTabBlocks({ ...defaultParams, recentSessions: [] });
     const found = blocks.some((b: any) =>
-      JSON.stringify(b).includes('session_page_next') || JSON.stringify(b).includes('session_page_prev')
+      JSON.stringify(b).includes('No recent sessions')
     );
     expect(found).toBe(true);
   });

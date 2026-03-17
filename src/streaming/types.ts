@@ -174,6 +174,7 @@ export interface ProcessedActions {
   bundleActions: BundleAction[];
   textAction?: SlackAction;
   resultEvent?: any;
+  mainApiCallCount?: number;
 }
 
 // Reusable block type

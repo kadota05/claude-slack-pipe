@@ -145,21 +145,13 @@ export function buildSubagentModal(
 
   for (const step of flow.steps) {
     if (step.type === 'tool_use' && step.toolName) {
-      const sectionBlock: Block = {
+      blocks.push({
         type: 'section',
         text: {
           type: 'mrkdwn',
           text: `:wrench: \`${step.toolName}\` ${step.oneLiner || ''}`,
         },
-      };
-      if (step.toolUseId) {
-        sectionBlock.accessory = {
-          type: 'button',
-          text: { type: 'plain_text', text: '詳細' },
-          action_id: `view_tool_detail:${step.toolUseId}`,
-        };
-      }
-      blocks.push(sectionBlock);
+      });
     } else if (step.type === 'tool_result') {
       const icon = step.isError ? ':x:' : ':white_check_mark:';
       blocks.push({

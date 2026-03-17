@@ -108,7 +108,6 @@ export class SessionCoordinator {
 
   private wireEvents(entry: ManagedEntry, params: SessionStartParams & { userId: string }): void {
     const { session } = entry;
-
     session.on('stateChange', (from: string, to: string) => {
       if (to === 'idle' && !entry.sessionQueue.isEmpty) {
         const next = entry.sessionQueue.dequeue();
@@ -118,15 +117,20 @@ export class SessionCoordinator {
       }
 
       if (to === 'dead' && from === 'processing') {
-        entry.crashCount++;
-        if (entry.crashCount <= 3) {
-          const delay = Math.pow(2, entry.crashCount - 1) * 1000;
-          logger.info(`Auto-respawn ${session.sessionId} in ${delay}ms (crash #${entry.crashCount})`);
-          setTimeout(() => {
-            session.spawn();
-          }, delay);
+        if (session.wasInterrupted) {
+          // User-initiated interrupt — don't auto-respawn
+          logger.info(`Session ${session.sessionId} interrupted by user, skipping auto-respawn`);
         } else {
-          logger.warn(`Session ${session.sessionId} exceeded crash limit (${entry.crashCount})`);
+          entry.crashCount++;
+          if (entry.crashCount <= 3) {
+            const delay = Math.pow(2, entry.crashCount - 1) * 1000;
+            logger.info(`Auto-respawn ${session.sessionId} in ${delay}ms (crash #${entry.crashCount})`);
+            setTimeout(() => {
+              session.spawn();
+            }, delay);
+          } else {
+            logger.warn(`Session ${session.sessionId} exceeded crash limit (${entry.crashCount})`);
+          }
         }
       }
 

@@ -26,7 +26,6 @@ import type { BundleAction } from './streaming/types.js';
 import { SerialActionQueue } from './streaming/serial-action-queue.js';
 import { SessionJsonlReader } from './streaming/session-jsonl-reader.js';
 import { SubagentJsonlReader } from './streaming/subagent-jsonl-reader.js';
-import { Heartbeat } from './heartbeat.js';
 import { RecentSessionScanner } from './store/recent-session-scanner.js';
 
 function waitForIdle(session: PersistentSession, timeoutMs = 300000): Promise<void> {
@@ -40,7 +39,14 @@ function waitForIdle(session: PersistentSession, timeoutMs = 300000): Promise<vo
     session.on('stateChange', (_from: string, to: string) => {
       logger.info(`[waitForIdle] stateChange: ${_from} → ${to}`);
       if (to === 'idle') { clearTimeout(timer); resolve(); }
-      if (to === 'dead') { clearTimeout(timer); reject(new Error('Session died during init')); }
+      if (to === 'dead') {
+        clearTimeout(timer);
+        if (session.wasInterrupted) {
+          resolve(); // Interrupted by user — not an error
+        } else {
+          reject(new Error('Session died during init'));
+        }
+      }
     });
   });
 }
@@ -53,9 +59,6 @@ async function main(): Promise<void> {
 
   // Singleton lock — prevent duplicate instances
   const pidLock = acquirePidLock(config.dataDir);
-
-  const heartbeat = new Heartbeat(config.dataDir);
-  heartbeat.start();
 
   const app = createApp(config);
 
@@ -84,12 +87,24 @@ async function main(): Promise<void> {
   const reactionManager = new ReactionManager(app.client);
   const errorHandler = new ErrorDisplayHandler(app.client);
   const bridgeCommands = new BridgeCommandHandler(app.client);
-  const homeTabHandler = new HomeTabHandler(app.client, userPrefStore, projectStore, heartbeat, recentSessionScanner);
+  const homeTabHandler = new HomeTabHandler(app.client, userPrefStore, projectStore, recentSessionScanner);
   const actionHandler = new ActionHandler(userPrefStore, coordinator, homeTabHandler);
+
+  // --- Duplicate message guard ---
+  // Tracks recent top-level messages per user to block duplicate Slack events
+  // (e.g. client re-sends with new ts while directory is changed).
+  // Only applies to new threads (no thread_ts), not thread replies.
+  const recentNewThreadMessages = new Map<string, { ts: string; time: number }>();
+  const DEDUP_WINDOW_MS = 30_000;
+
+  // --- Per-user session creation lock ---
+  // Prevents race condition between findByThreadTs and register
+  // when concurrent handleMessage calls overlap during await.
+  const sessionCreationLocks = new Map<string, Promise<void>>();
 
   // --- Message Handler ---
   async function handleMessage(event: any): Promise<void> {
-    logger.info('[DEBUG] handleMessage called', { type: event.type, channel_type: event.channel_type, bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 50), user: event.user });
+    logger.info('[DEBUG] handleMessage called', { type: event.type, channel_type: event.channel_type, bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 50), user: event.user, ts: event.ts, client_msg_id: event.client_msg_id });
     if (event.channel_type !== 'im') { logger.info('[DEBUG] skipped: not im'); return; }
     if (event.bot_id || event.subtype) { logger.info('[DEBUG] skipped: bot_id or subtype', { bot_id: event.bot_id, subtype: event.subtype }); return; }
 
@@ -98,6 +113,30 @@ async function main(): Promise<void> {
     const messageTs = event.ts;
     const threadTs = event.thread_ts || event.ts;
     const text = sanitizeUserInput(event.text || '');
+
+    // --- Guard: block duplicate new-thread messages ---
+    // Only for top-level messages (potential new threads), not thread replies.
+    if (!event.thread_ts) {
+      const dedupKey = `${userId}:${text}`;
+      const now = Date.now();
+      const prev = recentNewThreadMessages.get(dedupKey);
+      if (prev && (now - prev.time) < DEDUP_WINDOW_MS) {
+        logger.warn('[DEDUP] Blocked duplicate new-thread message', {
+          userId,
+          textPreview: text.slice(0, 50),
+          prevTs: prev.ts,
+          newTs: messageTs,
+          sameTsAsOriginal: prev.ts === messageTs,
+          elapsedMs: now - prev.time,
+        });
+        return;
+      }
+      recentNewThreadMessages.set(dedupKey, { ts: messageTs, time: now });
+      // Clean old entries
+      for (const [k, v] of recentNewThreadMessages) {
+        if (now - v.time > 60_000) recentNewThreadMessages.delete(k);
+      }
+    }
 
     logger.info('[DEBUG] auth check', { userId, allowed: auth.isAllowed(userId) });
     // Auth + Rate limit
@@ -176,74 +215,102 @@ async function main(): Promise<void> {
     const prompt = parsed.type === 'passthrough' ? parsed.content : parsed.content;
 
     // Resolve or create session
-    let indexEntry = sessionIndexStore.findByThreadTs(threadTs);
+    // Acquire per-user lock to prevent race condition between findByThreadTs and register
+    const prevLock = sessionCreationLocks.get(userId) || Promise.resolve();
+    let releaseLock: () => void;
+    const lockPromise = new Promise<void>((resolve) => { releaseLock = resolve; });
+    sessionCreationLocks.set(userId, prevLock.then(() => lockPromise));
+    await prevLock;
+
+    let indexEntry: ReturnType<typeof sessionIndexStore.findByThreadTs>;
     let session: PersistentSession;
 
-    if (!indexEntry) {
-      // New session
-      const prefs = userPrefStore.get(userId);
-      const projects = projectStore.getProjects();
-      const activeDir = prefs.activeDirectoryId
-        ? projects.find((p) => p.id === prefs.activeDirectoryId)
-        : projects[0];
-      const projectPath = activeDir?.workingDirectory || process.cwd();
-      const sessionId = crypto.randomUUID();
+    try {
+      indexEntry = sessionIndexStore.findByThreadTs(threadTs);
 
-      session = await coordinator.getOrCreateSession({
-        sessionId,
-        userId,
-        model: prefs.defaultModel,
-        projectPath,
-        budgetUsd: config.defaultBudgetUsd,
-        isResume: false,
-      });
+      if (!indexEntry) {
+        // New session
+        const prefs = userPrefStore.get(userId);
+        const projects = projectStore.getProjects();
+        const activeDir = prefs.activeDirectoryId
+          ? projects.find((p) => p.id === prefs.activeDirectoryId)
+          : projects[0];
+        const projectPath = activeDir?.workingDirectory || process.cwd();
+        const sessionId = crypto.randomUUID();
 
-      // Register in index
-      sessionIndexStore.register({
-        cliSessionId: sessionId,
-        threadTs,
-        channelId,
-        userId,
-        projectPath,
-        name: text.substring(0, 50),
-        model: prefs.defaultModel,
-        status: 'active',
-        createdAt: new Date().toISOString(),
-        lastActiveAt: new Date().toISOString(),
-      });
+        session = await coordinator.getOrCreateSession({
+          sessionId,
+          userId,
+          model: prefs.defaultModel,
+          projectPath,
+          budgetUsd: config.defaultBudgetUsd,
+          isResume: false,
+        });
 
-      // Post thread header (ephemeral)
-      const headerText = buildThreadHeaderText({
-        projectPath,
-        model: prefs.defaultModel,
-        sessionId,
-      });
-      await app.client.chat.postEphemeral({
-        channel: channelId,
-        thread_ts: threadTs,
-        user: userId,
-        text: headerText,
-      });
+        // Register in index
+        sessionIndexStore.register({
+          cliSessionId: sessionId,
+          threadTs,
+          channelId,
+          userId,
+          projectPath,
+          name: text.substring(0, 50),
+          model: prefs.defaultModel,
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          lastActiveAt: new Date().toISOString(),
+        });
 
-      indexEntry = sessionIndexStore.findByThreadTs(threadTs)!;
-    } else {
-      // Existing session — always use user's current preferred model
-      const prefs = userPrefStore.get(userId);
-      const preferredModel = prefs.defaultModel;
-      const existingSession = coordinator.getSession(indexEntry.cliSessionId);
+        // Post thread header (ephemeral) — after register, outside lock-critical section
+        const headerText = buildThreadHeaderText({
+          projectPath,
+          model: prefs.defaultModel,
+          sessionId,
+        });
+        await app.client.chat.postEphemeral({
+          channel: channelId,
+          thread_ts: threadTs,
+          user: userId,
+          text: headerText,
+        });
 
-      if (existingSession && existingSession.state !== 'dead') {
-        // If model changed, kill the old session and respawn with new model
-        if (existingSession.model !== preferredModel) {
-          logger.info(`Model changed from ${existingSession.model} to ${preferredModel}, restarting session ${indexEntry.cliSessionId}`);
-          existingSession.kill();
-          // Wait for process to die before respawning
-          await new Promise<void>((resolve) => {
-            if (existingSession.state === 'dead') return resolve();
-            existingSession.on('stateChange', (_from: string, to: string) => {
-              if (to === 'dead') resolve();
+        indexEntry = sessionIndexStore.findByThreadTs(threadTs)!;
+      } else {
+        // Existing session — always use user's current preferred model
+        const prefs = userPrefStore.get(userId);
+        const preferredModel = prefs.defaultModel;
+        const existingSession = coordinator.getSession(indexEntry.cliSessionId);
+
+        if (existingSession && existingSession.state !== 'dead') {
+          // If model changed, kill the old session and respawn with new model
+          if (existingSession.model !== preferredModel) {
+            logger.info(`Model changed from ${existingSession.model} to ${preferredModel}, restarting session ${indexEntry.cliSessionId}`);
+            existingSession.kill('model_change');
+            await app.client.chat.postMessage({
+              channel: channelId,
+              thread_ts: threadTs,
+              text: `:arrows_counterclockwise: モデルを ${existingSession.model} → ${preferredModel} に変更しました。セッションを再起動します。`,
             });
-          });
+            // Wait for process to die before respawning
+            await new Promise<void>((resolve) => {
+              if (existingSession.state === 'dead') return resolve();
+              existingSession.on('stateChange', (_from: string, to: string) => {
+                if (to === 'dead') resolve();
+              });
+            });
+            session = await coordinator.getOrCreateSession({
+              sessionId: indexEntry.cliSessionId,
+              userId,
+              model: preferredModel,
+              projectPath: indexEntry.projectPath,
+              budgetUsd: config.defaultBudgetUsd,
+              isResume: true,
+            });
+          } else {
+            session = existingSession;
+          }
+        } else {
+          // Respawn dead session with current preferred model
           session = await coordinator.getOrCreateSession({
             sessionId: indexEntry.cliSessionId,
             userId,
@@ -252,25 +319,15 @@ async function main(): Promise<void> {
             budgetUsd: config.defaultBudgetUsd,
             isResume: true,
           });
-        } else {
-          session = existingSession;
         }
-      } else {
-        // Respawn dead session with current preferred model
-        session = await coordinator.getOrCreateSession({
-          sessionId: indexEntry.cliSessionId,
-          userId,
-          model: preferredModel,
-          projectPath: indexEntry.projectPath,
-          budgetUsd: config.defaultBudgetUsd,
-          isResume: true,
-        });
-      }
 
-      // Update index if model changed
-      if (indexEntry.model !== preferredModel) {
-        sessionIndexStore.update(indexEntry.cliSessionId, { model: preferredModel });
+        // Update index if model changed
+        if (indexEntry.model !== preferredModel) {
+          sessionIndexStore.update(indexEntry.cliSessionId, { model: preferredModel });
+        }
       }
+    } finally {
+      releaseLock!();
     }
 
     // Wire message handler for this session (idempotent — check if already wired)
@@ -381,7 +438,7 @@ async function main(): Promise<void> {
       serialQueue.enqueue(async () => {
         try {
           // 1. Process event synchronously — returns actions
-          const { bundleActions, textAction, resultEvent } = streamProcessor.processEvent(event);
+          const { bundleActions, textAction, resultEvent, mainApiCallCount } = streamProcessor.processEvent(event);
 
           // 2. Execute bundle actions sequentially
           for (const ba of bundleActions) {
@@ -405,22 +462,23 @@ async function main(): Promise<void> {
             logger.info(`[${session.sessionId}] result event received`);
 
             const usage = resultEvent.usage || {};
+            const apiCalls = mainApiCallCount || 1;
             const inputTotal = (usage.input_tokens || 0)
               + (usage.cache_read_input_tokens || 0)
               + (usage.cache_creation_input_tokens || 0);
+            const contextUsed = Math.round(inputTotal / apiCalls);
 
             const sessionModel = indexStore.findByThreadTs(threadTs)?.model || '';
-            const modelUsageEntry = resultEvent.modelUsage
-              && Object.values(resultEvent.modelUsage)[0];
-            const contextWindow = modelUsageEntry?.contextWindow
-              || (sessionModel.includes('haiku') ? 200_000 : 1_000_000);
+            const contextWindow = sessionModel.includes('haiku') ? 200_000 : 1_000_000;
+
+            logger.info(`[${session.sessionId}] ctx: ${inputTotal} / ${apiCalls} calls = ${contextUsed} (${(contextUsed / contextWindow * 100).toFixed(1)}%)`);
 
             const footerBlocks = buildResponseFooter({
               inputTokens: usage.input_tokens || 0,
               outputTokens: usage.output_tokens || 0,
-              contextUsed: inputTotal,
+              contextUsed,
               contextWindow,
-              model: indexStore.findByThreadTs(threadTs)?.model || 'unknown',
+              model: sessionModel || 'unknown',
               durationMs: resultEvent.duration_ms || 0,
             });
 
@@ -462,6 +520,7 @@ async function main(): Promise<void> {
     session.on('stateChange', (_from: string, to: string) => {
       if (to === 'dead' || to === 'ending') {
         streamProcessor.dispose();
+        wiredSessions.delete(session.sessionId);
       }
     });
   }
@@ -479,18 +538,54 @@ async function main(): Promise<void> {
 
   // Interrupt via reaction — only targets messages currently being processed
   app.event('reaction_added', async ({ event }) => {
+    logger.info('[REACTION] reaction_added event received', {
+      reaction: (event as any).reaction,
+      itemTs: (event as any).item?.ts,
+      itemChannel: (event as any).item?.channel,
+    });
     if ((event as any).reaction !== 'red_circle') return;
     const item = (event as any).item;
     if (!item?.ts) return;
+
+    logger.info('[REACTION] 🔴 detected, searching activeMessageTs', {
+      itemTs: item.ts,
+      activeEntries: Array.from(activeMessageTs.entries()).map(([sid, ts]) => ({ sid: sid.slice(0, 8), ts })),
+    });
+
     // Find session by matching activeMessageTs values
+    let found = false;
     for (const [sessionId, msgTs] of activeMessageTs) {
       if (msgTs === item.ts) {
+        found = true;
         const session = coordinator.getSession(sessionId);
+        logger.info('[REACTION] Match found', {
+          sessionId: sessionId.slice(0, 8),
+          sessionExists: !!session,
+          sessionState: session?.state || 'N/A',
+        });
         if (session && session.state === 'processing') {
-          session.sendControl({ type: 'control', subtype: 'interrupt' });
+          session.sendInterrupt();
+          logger.info('[REACTION] SIGINT sent to session', { sessionId: sessionId.slice(0, 8) });
+
+          // Clean up UI: remove 🧠, add 🛑, post interruption notice
+          const channel = item.channel;
+          activeMessageTs.delete(sessionId);
+          await reactionManager.removeProcessing(channel, msgTs);
+
+          const indexEntry = sessionIndexStore.findBySessionId(sessionId);
+          if (indexEntry) {
+            await app.client.chat.postMessage({
+              channel,
+              thread_ts: indexEntry.threadTs,
+              text: '⏹️ Interrupted by user.',
+            });
+          }
         }
         break;
       }
+    }
+    if (!found) {
+      logger.warn('[REACTION] No matching session found for item.ts', { itemTs: item.ts });
     }
   });
 
@@ -718,7 +813,6 @@ async function main(): Promise<void> {
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info(`Received ${signal}, shutting down...`);
-    heartbeat.stop();
     // End all alive sessions
     for (const entry of sessionIndexStore.getActive()) {
       coordinator.endSession(entry.cliSessionId);

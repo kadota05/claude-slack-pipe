@@ -1,6 +1,5 @@
 import { buildHomeTabBlocks, getTimeAgo } from './block-builder.js';
 import { logger } from '../utils/logger.js';
-import type { Heartbeat } from '../heartbeat.js';
 import type { RecentSessionScanner } from '../store/recent-session-scanner.js';
 
 export class HomeTabHandler {
@@ -8,7 +7,6 @@ export class HomeTabHandler {
     private readonly client: any,
     private readonly userPrefStore: any,
     private readonly projectStore: any,
-    private readonly heartbeat: Heartbeat,
     private readonly recentSessionScanner: RecentSessionScanner,
   ) {}
 
@@ -28,8 +26,6 @@ export class HomeTabHandler {
       })
       .slice(0, 100);
 
-    const isActive = this.heartbeat.isAlive();
-
     let recentSessions: Array<{
       timeAgo: string;
       firstPromptPreview: string;
@@ -48,7 +44,6 @@ export class HomeTabHandler {
     }
 
     const blocks = buildHomeTabBlocks({
-      isActive,
       model: prefs.defaultModel,
       directoryId: prefs.activeDirectoryId,
       directories,

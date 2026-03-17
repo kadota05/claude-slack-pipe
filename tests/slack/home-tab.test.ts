@@ -5,25 +5,23 @@ describe('HomeTabHandler (phase2)', () => {
   let handler: HomeTabHandler;
   let mockClient: any;
   let mockUserPrefStore: any;
-  let mockSessionIndexStore: any;
   let mockProjectStore: any;
+  let mockRecentSessionScanner: any;
 
   beforeEach(() => {
     mockClient = { views: { publish: vi.fn().mockResolvedValue({ ok: true }) } };
     mockUserPrefStore = {
       get: vi.fn().mockReturnValue({ defaultModel: 'sonnet', activeDirectoryId: null }),
     };
-    mockSessionIndexStore = {
-      getActive: vi.fn().mockReturnValue([]),
-      getEnded: vi.fn().mockReturnValue([]),
-      listByDirectory: vi.fn().mockReturnValue([]),
-    };
     mockProjectStore = {
       getProjects: vi.fn().mockReturnValue([
-        { name: 'myapp', path: '/home/user/myapp' },
+        { name: 'myapp', workingDirectory: '/home/user/myapp' },
       ]),
     };
-    handler = new HomeTabHandler(mockClient, mockUserPrefStore, mockSessionIndexStore, mockProjectStore);
+    mockRecentSessionScanner = {
+      scan: vi.fn().mockResolvedValue([]),
+    };
+    handler = new HomeTabHandler(mockClient, mockUserPrefStore, mockProjectStore, mockRecentSessionScanner);
   });
 
   it('publishes home tab with correct user preferences', async () => {
@@ -32,15 +30,8 @@ describe('HomeTabHandler (phase2)', () => {
     expect(mockUserPrefStore.get).toHaveBeenCalledWith('U001');
   });
 
-  it('filters sessions by active directory when set', async () => {
-    mockUserPrefStore.get.mockReturnValue({ defaultModel: 'sonnet', activeDirectoryId: 'myapp' });
+  it('scans recent sessions', async () => {
     await handler.publishHomeTab('U001');
-    expect(mockSessionIndexStore.listByDirectory).toHaveBeenCalled();
-  });
-
-  it('uses getActive/getEnded when no directory selected', async () => {
-    await handler.publishHomeTab('U001');
-    expect(mockSessionIndexStore.getActive).toHaveBeenCalled();
-    expect(mockSessionIndexStore.getEnded).toHaveBeenCalled();
+    expect(mockRecentSessionScanner.scan).toHaveBeenCalled();
   });
 });

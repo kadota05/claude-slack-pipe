@@ -10,6 +10,33 @@ const MAX_LINES_TO_READ = 20;
 const MAX_DISPLAY = 5;
 const PREVIEW_LENGTH = 50;
 
+/**
+ * Strip Claude Code command XML tags from user messages.
+ * Messages from slash commands look like:
+ *   <command-message>skill-name</command-message>
+ *   <command-name>/skill-name</command-name>
+ *   <command-args>actual prompt</command-args>
+ * Returns { commandName, body } where body is the user's actual text.
+ */
+export function stripCommandTags(raw: string): { commandName: string | null; body: string } {
+  const nameMatch = raw.match(/<command-name>\/?([^<]+)<\/command-name>/);
+  const argsMatch = raw.match(/<command-args>([\s\S]*?)<\/command-args>/);
+
+  if (argsMatch) {
+    return {
+      commandName: nameMatch?.[1]?.trim() || null,
+      body: argsMatch[1].trim(),
+    };
+  }
+
+  // No command tags — return cleaned text
+  const cleaned = raw
+    .replace(/<command-message>[^<]*<\/command-message>/g, '')
+    .replace(/<command-name>[^<]*<\/command-name>/g, '')
+    .trim();
+  return { commandName: nameMatch?.[1]?.trim() || null, body: cleaned || raw };
+}
+
 export class RecentSessionScanner {
   constructor(private readonly claudeProjectsDir: string) {}
 
@@ -19,17 +46,28 @@ export class RecentSessionScanner {
 
     const sessions: RecentSession[] = [];
     for (const c of candidates) {
-      const firstPrompt = await this.readFirstUserMessage(c.filePath);
-      if (firstPrompt === null) continue;
+      const rawPrompt = await this.readFirstUserMessage(c.filePath);
+      if (rawPrompt === null) continue;
+      const { commandName, body } = stripCommandTags(rawPrompt);
+      const firstPrompt = body || rawPrompt;
       const parts = decodeProjectId(c.projectId).split('/').filter(Boolean);
+
+      // Build preview: "[cmd] body..." or just "body..."
+      // Strip namespace prefixes (e.g. "superpowers:systematic-debugging" → "systematic-debugging")
+      const shortName = commandName?.replace(/^[^:]+:/, '') || commandName;
+      const prefix = shortName ? `[${shortName}] ` : '';
+      const maxBody = PREVIEW_LENGTH - prefix.length;
+      const bodyPreview = body.length > maxBody
+        ? body.slice(0, maxBody) + '...'
+        : body;
+      const firstPromptPreview = prefix + bodyPreview;
+
       sessions.push({
         sessionId: c.sessionId,
         projectPath: parts.slice(-2).join('/') || c.projectId,
         mtime: c.mtime,
         firstPrompt,
-        firstPromptPreview: firstPrompt.length > PREVIEW_LENGTH
-          ? firstPrompt.slice(0, PREVIEW_LENGTH) + '...'
-          : firstPrompt,
+        firstPromptPreview,
       });
     }
 

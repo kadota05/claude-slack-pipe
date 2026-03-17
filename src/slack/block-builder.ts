@@ -106,7 +106,6 @@ export function buildResultBlocks(params: ResultBlocksParams): Block[] {
 }
 
 export interface HomeTabParams {
-  isActive: boolean;
   model: string;
   directoryId: string;
   directories: Array<{ id: string; name: string; path: string }>;
@@ -118,18 +117,10 @@ export interface HomeTabParams {
 }
 
 export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
-  const { isActive, model, directoryId, directories, recentSessions } = params;
-
-  const statusEmoji = isActive ? '🟢' : '🔴';
-  const statusText = isActive ? 'Active' : 'Inactive';
+  const { model, directoryId, directories, recentSessions } = params;
 
   const blocks: Block[] = [
-    // 1. Status as header (large bold text)
-    {
-      type: 'header',
-      text: { type: 'plain_text', text: `${statusEmoji} ${statusText}` },
-    },
-    // 2. Model selector
+    // 1. Model selector
     {
       type: 'section',
       text: { type: 'mrkdwn', text: '*Model*' },

@@ -24,6 +24,8 @@ export class PersistentSession extends EventEmitter {
   private readonly params: SessionStartParams;
   private stdoutBuffer = '';
   private _hasPendingInitialPrompt = false;
+  private _interrupted = false;
+  private _killedForModelChange = false;
 
   constructor(params: SessionStartParams) {
     super();
@@ -37,6 +39,11 @@ export class PersistentSession extends EventEmitter {
 
   get model(): string {
     return this.params.model;
+  }
+
+  /** True if the session was intentionally interrupted (not crashed). */
+  get wasInterrupted(): boolean {
+    return this._interrupted;
   }
 
   spawn(): void {
@@ -116,6 +123,24 @@ export class PersistentSession extends EventEmitter {
     this.writeStdin(msg);
   }
 
+  /**
+   * Interrupt the current turn by sending SIGINT to the CLI process.
+   * This mirrors pressing Escape/Ctrl+C in the interactive CLI.
+   */
+  sendInterrupt(): void {
+    if (!this.process) {
+      logger.warn(`Cannot interrupt ${this.sessionId}: no active process`);
+      return;
+    }
+    if (this._state !== 'processing') {
+      logger.warn(`Cannot interrupt ${this.sessionId}: not processing (state=${this._state})`);
+      return;
+    }
+    this._interrupted = true;
+    logger.info(`[${this.sessionId}] Sending SIGINT to interrupt current turn`);
+    this.process.kill('SIGINT');
+  }
+
   end(): void {
     if (this._state === 'dead' || this._state === 'ending' || this._state === 'not_started') {
       return;
@@ -127,8 +152,15 @@ export class PersistentSession extends EventEmitter {
     }
   }
 
-  kill(): void {
+  /**
+   * Kill the session, optionally marking it as a model-change restart
+   * so that handleExit does not emit an error event.
+   */
+  kill(reason?: 'model_change'): void {
     if (!this.process) return;
+    if (reason === 'model_change') {
+      this._killedForModelChange = true;
+    }
     this.clearIdleTimer();
     this.process.kill('SIGTERM');
     this.killTimer = setTimeout(() => {
@@ -212,7 +244,13 @@ export class PersistentSession extends EventEmitter {
     const wasProcessing = this._state === 'processing';
     this.transition('dead');
 
-    if (wasProcessing || (code !== null && code !== 0)) {
+    if (this._killedForModelChange) {
+      // Intentional kill for model change — don't emit error
+      logger.info(`[${this.sessionId}] Process exited due to model change`);
+    } else if (this._interrupted) {
+      // Intentional interrupt via 🔴 reaction — don't emit error
+      logger.info(`[${this.sessionId}] Process exited due to user interrupt`);
+    } else if (wasProcessing || (code !== null && code !== 0)) {
       this.emit('error', new Error(
         `Process exited unexpectedly: code=${code}, signal=${signal}`
       ));
