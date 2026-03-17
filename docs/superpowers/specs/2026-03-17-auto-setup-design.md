@@ -29,6 +29,8 @@ git clone <repo> && cd claude-slack-pipe
 
 コードの変更は不要。`src/` には手を入れない。
 
+**注意：** CLAUDE.mdへの追記は実装時（スキルファイル作成と同時）に一度だけ行う。スキル実行時には追記しない。
+
 ---
 
 ## スキル起動フロー
@@ -125,11 +127,13 @@ git clone <repo> && cd claude-slack-pipe
 - Scope: `connections:write` を追加
 - 「Generate」をクリック
 - `xapp-` で始まるトークンを貼ってもらう
+- **検証：** `xapp-` で始まらない場合は即座に指摘し、正しい値を再入力してもらう
 
 **2. Bot Token（SLACK_BOT_TOKEN）**
 - 「Features → OAuth & Permissions」を案内
 - 「Install to Workspace」をクリック → 権限を「Allow」
 - Bot User OAuth Token（`xoxb-` で始まる）を貼ってもらう
+- **検証：** `xoxb-` で始まらない場合は即座に指摘し、正しい値を再入力してもらう
 
 **3. ALLOWED_USER_IDS**
 - **推奨：** SlackプロフィールからUser IDを確認する方法を案内
@@ -137,15 +141,51 @@ git clone <repo> && cd claude-slack-pipe
   - `U` で始まるIDを貼ってもらう
 - **代替：** 専用Workspaceで自分しかいない場合は空（制限なし）でもOKと提示
 
-**4. .env生成**
+**4. 既存.envの確認**
+- `.env` が既に存在する場合は「既存の.envがあります。上書きしますか？既存の設定を使いますか？」と確認する
+- 上書きする場合のみ続行
+
+**5. .env生成**
 - 収集した値で `.env` ファイルを生成
-- その他の項目はデフォルト値を使用（.env.exampleに準拠）
+- 生成する `.env` の完全な内容：
+
+```env
+# Slack credentials (user input)
+SLACK_BOT_TOKEN=<収集した値>
+SLACK_APP_TOKEN=<収集した値>
+
+# Access control
+ALLOWED_USER_IDS=<収集した値 or 空>
+ALLOWED_TEAM_IDS=
+ADMIN_USER_IDS=
+
+# Claude CLI
+CLAUDE_EXECUTABLE=claude
+CLAUDE_PROJECTS_DIR=~/.claude/projects
+
+# Concurrency limits
+MAX_CONCURRENT_PER_USER=1
+MAX_CONCURRENT_GLOBAL=3
+
+# Timeout settings (ms)
+DEFAULT_TIMEOUT_MS=300000
+MAX_TIMEOUT_MS=1800000
+
+# Logging
+LOG_LEVEL=info
+```
 
 ### タスク6: Bridge起動・動作確認
 
 **自動実行：**
 - `npx tsx src/index.ts` を `run_in_background: true` で実行
 - ログに「Claude Code Slack Bridge is running」が出ることを確認
+- エラーログが出ていないことを確認（特にSocket Mode接続エラー）
+
+**起動失敗時の切り分け：**
+- `Invalid token` 系エラー → トークンの再確認を案内（タスク5に戻る）
+- `ENOENT` エラー → Claude CLIバージョン不一致の可能性。CLAUDE.mdの `/fix-claude-cli-version` を参照
+- その他のエラー → エラー内容を表示して対処を案内
 
 **完了案内：**
 > セットアップ完了！Slackから話しかけてみてください。
@@ -171,3 +211,5 @@ git clone <repo> && cd claude-slack-pipe
 - Event Subscriptions: `message.im`, `app_home_opened`
 - Interactivity: 有効
 - App名: `Claude Code Bridge`
+
+**注意：** 実装時に既存の動作するSlack Appのscopes/eventsと照合し、マニフェストに過不足がないことを検証すること。
