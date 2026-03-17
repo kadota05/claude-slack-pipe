@@ -74,11 +74,15 @@ export class StreamProcessor {
   private handleAssistant(content: any[], parentToolUseId: string | null, result: ProcessedActions): void {
     for (const block of content) {
       if (block.type === 'thinking') {
+        // Skip child thinking — internal to subagent
+        if (parentToolUseId) continue;
         const actions = this.groupTracker.handleThinking(block.thinking);
         result.bundleActions.push(...actions);
       } else if (block.type === 'tool_use') {
         this.handleToolUse(block, parentToolUseId, result);
       } else if (block.type === 'text' && block.text) {
+        // Skip child text — internal to subagent
+        if (parentToolUseId) continue;
         this.handleText(block.text, result);
       }
     }
