@@ -79,6 +79,7 @@ export class SessionJsonlReader {
     let textBlockCount = 0;
     let hasActivityInCurrentSegment = false; // tracks whether thinking/tool/subagent appeared before next text
     let textBufferLength = 0; // accumulated text length for bundle boundary check
+    let textPosted = false; // mirrors streaming side's textMessageTs — once text is posted, any text triggers boundary
     let lineTimestamp = 0; // use line-order index as proxy for time (no real timestamps in JSONL)
 
     for await (const line of rl) {
@@ -103,21 +104,32 @@ export class SessionJsonlReader {
       if (isChild) continue;
 
       const role = msg.role;
-      const isCollecting = textBlockCount === bundleIndex;
 
       for (const block of msg.content) {
         if (!block || typeof block !== 'object') continue;
+
+        // Re-evaluate per block so boundary changes from text blocks
+        // are reflected for subsequent tool_use blocks in the same line
+        const isCollecting = textBlockCount === bundleIndex;
 
         if (block.type === 'text' && role === 'assistant') {
           const textLen = typeof block.text === 'string' ? block.text.length : 0;
           textBufferLength += textLen;
 
-          // Only count as bundle boundary when accumulated text >= 100 chars,
-          // matching the streaming side's textBuffer threshold.
-          if (hasActivityInCurrentSegment && textBufferLength >= 100) {
+          // Match streaming side's handleText logic:
+          // - Before text is "posted" (textPosted=false): collapse only when textBuffer >= 100
+          // - After text is "posted" (textPosted=true): ANY text after activity triggers collapse
+          // Streaming side: if (!this.textMessageTs && this.textBuffer.length < 100) return;
+          const shouldCollapse = textPosted || textBufferLength >= 100;
+
+          if (hasActivityInCurrentSegment && shouldCollapse) {
             textBlockCount++;
             hasActivityInCurrentSegment = false;
+            textPosted = true;
             textBufferLength = 0;
+          } else if (!textPosted && textBufferLength >= 100) {
+            // Text reaches threshold without prior activity — mark as "posted"
+            textPosted = true;
           }
           continue;
         }
