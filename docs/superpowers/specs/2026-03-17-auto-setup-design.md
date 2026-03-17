@@ -207,8 +207,8 @@ LOG_LEVEL=info
 現在のSlack App設定を反映したマニフェストJSONを作成する。含む設定：
 
 - Socket Mode: 有効
-- Bot Token Scopes: `app_mentions:read`, `chat:write`, `reactions:write`, `files:write`, `files:read`, `im:write`, `im:history`, `im:read`
-- Event Subscriptions: `message.im`, `app_home_opened`
+- Bot Token Scopes: `app_mentions:read`, `chat:write`, `files:read`, `files:write`, `im:history`, `im:read`, `im:write`, `reactions:read`, `reactions:write`
+- Event Subscriptions: `message.im`, `app_home_opened`, `reaction_added`
 - Interactivity: 有効
 - App名: `Claude Code Bridge`
 

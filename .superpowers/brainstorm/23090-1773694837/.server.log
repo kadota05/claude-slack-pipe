@@ -1,6 +1,0 @@
-{"type":"server-started","port":58295,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:58295","screen_dir":"/Users/archeco055/dev/claude-slack-pipe/.superpowers/brainstorm/23090-1773694837"}
-{"type":"screen-added","file":"/Users/archeco055/dev/claude-slack-pipe/.superpowers/brainstorm/23090-1773694837/home-tab-approaches.html"}
-{"type":"screen-added","file":"/Users/archeco055/dev/claude-slack-pipe/.superpowers/brainstorm/23090-1773694837/home-tab-approach-a-v2.html"}
-{"type":"screen-added","file":"/Users/archeco055/dev/claude-slack-pipe/.superpowers/brainstorm/23090-1773694837/home-tab-final.html"}
-{"type":"screen-added","file":"/Users/archeco055/dev/claude-slack-pipe/.superpowers/brainstorm/23090-1773694837/waiting.html"}
-{"type":"server-stopped","reason":"idle timeout"}
