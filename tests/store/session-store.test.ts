@@ -8,22 +8,6 @@ describe('SessionStore', () => {
     store = new SessionStore();
   });
 
-  it('should generate deterministic session ID from threadTs', () => {
-    const id1 = store.threadTsToSessionId('1234567890.123456');
-    const id2 = store.threadTsToSessionId('1234567890.123456');
-    expect(id1).toBe(id2);
-    // Should be a valid UUID format
-    expect(id1).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-    );
-  });
-
-  it('should generate different IDs for different threadTs values', () => {
-    const id1 = store.threadTsToSessionId('1234567890.111111');
-    const id2 = store.threadTsToSessionId('1234567890.222222');
-    expect(id1).not.toBe(id2);
-  });
-
   it('should create and retrieve a session', () => {
     const session = store.create({
       threadTs: '1700000000.000001',
@@ -39,6 +23,24 @@ describe('SessionStore', () => {
 
     const retrieved = store.get(session.sessionId);
     expect(retrieved).toEqual(session);
+  });
+
+  it('should generate unique session IDs', () => {
+    const s1 = store.create({
+      threadTs: '1700000000.000001',
+      dmChannelId: 'C_DM1',
+      projectPath: '/p',
+      name: 'S1',
+      model: 'sonnet',
+    });
+    const s2 = store.create({
+      threadTs: '1700000000.000002',
+      dmChannelId: 'C_DM2',
+      projectPath: '/p',
+      name: 'S2',
+      model: 'sonnet',
+    });
+    expect(s1.sessionId).not.toBe(s2.sessionId);
   });
 
   it('should find session by threadTs', () => {

@@ -1,83 +1,75 @@
+// tests/slack/bridge-commands.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BridgeCommandHandler } from '../../src/slack/bridge-commands.js';
-import { SessionStore } from '../../src/store/session-store.js';
 
-describe('BridgeCommandHandler', () => {
-  let sessionStore: SessionStore;
-  let mockClient: any;
+describe('BridgeCommandHandler (phase2)', () => {
   let handler: BridgeCommandHandler;
+  let mockClient: any;
 
   beforeEach(() => {
-    sessionStore = new SessionStore();
     mockClient = {
       chat: {
-        postMessage: vi.fn().mockResolvedValue({ ok: true }),
-        update: vi.fn().mockResolvedValue({ ok: true }),
+        postEphemeral: vi.fn().mockResolvedValue({ ok: true }),
       },
     };
-    handler = new BridgeCommandHandler(sessionStore, mockClient);
-  });
-
-  describe('handleHelp', () => {
-    it('should post help message', async () => {
-      await handler.handleHelp('D123', '1.000');
-
-      expect(mockClient.chat.postMessage).toHaveBeenCalledTimes(1);
-      const args = mockClient.chat.postMessage.mock.calls[0][0];
-      expect(args.thread_ts).toBe('1.000');
-      expect(args.text).toContain('cc /');
-    });
+    handler = new BridgeCommandHandler(mockClient);
   });
 
   describe('handleStatus', () => {
-    it('should show session status when session exists', async () => {
-      sessionStore.create({
-        threadTs: '1.000',
-        dmChannelId: 'D123',
-        projectPath: '/dev/app',
-        name: 'test session',
-        model: 'sonnet',
+    it('posts ephemeral session status', async () => {
+      await handler.handleStatus({
+        channelId: 'C001',
+        threadTs: '123',
+        userId: 'U001',
+        sessionInfo: {
+          sessionId: 'sid',
+          model: 'sonnet',
+          projectPath: '/home/user/app',
+          totalCost: 0.12,
+          totalTokens: 18600,
+          turnCount: 2,
+          processState: 'idle',
+          startedAt: '2026-03-16 10:00',
+        },
       });
-
-      await handler.handleStatus('D123', '1.000');
-
-      expect(mockClient.chat.postMessage).toHaveBeenCalledTimes(1);
-      const args = mockClient.chat.postMessage.mock.calls[0][0];
-      expect(args.text).toContain('test session');
-    });
-
-    it('should show no active session message', async () => {
-      await handler.handleStatus('D123', '1.000');
-
-      expect(mockClient.chat.postMessage).toHaveBeenCalledTimes(1);
-      const args = mockClient.chat.postMessage.mock.calls[0][0];
-      expect(args.text).toContain('No active session');
+      expect(mockClient.chat.postEphemeral).toHaveBeenCalledOnce();
+      const call = mockClient.chat.postEphemeral.mock.calls[0][0];
+      expect(call.channel).toBe('C001');
+      expect(call.user).toBe('U001');
+      expect(call.text).toContain('sid');
     });
   });
 
   describe('handleEnd', () => {
-    it('should end active session', async () => {
-      sessionStore.create({
-        threadTs: '1.000',
-        dmChannelId: 'D123',
-        projectPath: '/dev/app',
-        name: 'test session',
-        model: 'sonnet',
+    it('posts ephemeral end summary and calls onEnd', async () => {
+      const onEnd = vi.fn().mockResolvedValue(undefined);
+      await handler.handleEnd({
+        channelId: 'C001',
+        threadTs: '123',
+        userId: 'U001',
+        sessionId: 'sid',
+        totalCost: 0.423,
+        totalTokens: 52400,
+        turnCount: 4,
+        duration: '45m',
+        onEnd,
       });
-
-      await handler.handleEnd('D123', '1.000');
-
-      const session = sessionStore.findByThreadTs('1.000');
-      expect(session?.status).toBe('ended');
-      expect(mockClient.chat.postMessage).toHaveBeenCalledTimes(1);
+      expect(onEnd).toHaveBeenCalled();
+      expect(mockClient.chat.postEphemeral).toHaveBeenCalledOnce();
     });
+  });
 
-    it('should show error when no session to end', async () => {
-      await handler.handleEnd('D123', '1.000');
-
-      expect(mockClient.chat.postMessage).toHaveBeenCalledTimes(1);
-      const args = mockClient.chat.postMessage.mock.calls[0][0];
-      expect(args.text).toContain('No active session');
+  describe('handleRestart', () => {
+    it('calls onRestart callback and posts ephemeral', async () => {
+      const onRestart = vi.fn().mockResolvedValue(undefined);
+      await handler.handleRestart({
+        channelId: 'C001',
+        threadTs: '123',
+        userId: 'U001',
+        sessionId: 'sid',
+        onRestart,
+      });
+      expect(onRestart).toHaveBeenCalled();
     });
   });
 });

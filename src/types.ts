@@ -1,5 +1,3 @@
-import type { ChildProcess } from 'node:child_process';
-
 // ============================================================
 // 5.1 Session Metadata
 // ============================================================
@@ -20,92 +18,17 @@ export interface SessionMetadata {
   totalInputTokens: number;
   totalOutputTokens: number;
   lastActiveAt: Date;
-  anchorCollapsed: boolean;
 }
 
 // ============================================================
-// 5.2 Process Management
+// 5.3 Stream Processing (see src/streaming/types.ts)
 // ============================================================
 
-export interface ProcessManagerConfig {
-  maxConcurrentPerUser: number;
-  maxConcurrentGlobal: number;
-  defaultTimeoutMs: number;
-  maxTimeoutMs: number;
-  defaultBudgetUsd: number;
-  maxBudgetUsd: number;
-}
-
-export interface ManagedProcess {
-  sessionId: string;
-  userId: string;
-  channelId: string;
-  projectId: string;
-  process: ChildProcess;
-  startedAt: Date;
-  timeoutTimer: NodeJS.Timeout;
-  status: 'running' | 'completing' | 'cancelled' | 'timed-out';
-  budgetUsd: number;
-}
+export type { StreamProcessorState, ToolUseTracker } from './streaming/types.js';
 
 // ============================================================
-// 5.3 Stream Processing (Phase 2, stubs only for MVP)
+// 5.4 Command Parser (see src/slack/command-parser.ts for ParsedCommand)
 // ============================================================
-
-export type ProcessingPhase =
-  | 'idle'
-  | 'thinking'
-  | 'tool_input'
-  | 'tool_running'
-  | 'sub_agent'
-  | 'completed'
-  | 'error';
-
-export interface StreamProcessorState {
-  phase: ProcessingPhase;
-  progressMessageTs: string | null;
-  steps: ToolUseStep[];
-  currentText: string;
-  currentToolUse: {
-    id: string;
-    name: string;
-    inputJson: string;
-  } | null;
-  subAgentSteps: Map<string, ToolUseStep[]>;
-  startTime: number;
-  lastThinkingSnippet: string;
-}
-
-export interface ToolUseStep {
-  index: number;
-  toolName: string;
-  toolUseId: string;
-  input: Record<string, unknown>;
-  output?: Record<string, unknown>;
-  error?: string;
-  status: 'running' | 'completed' | 'error';
-  startTime: number;
-  endTime?: number;
-  parentToolUseId: string | null;
-}
-
-export interface ToolUseSummary {
-  toolName: string;
-  status: 'running' | 'completed' | 'error';
-  oneLiner: string;
-  detailBlocks: unknown[];
-}
-
-// ============================================================
-// 5.4 Command Parser
-// ============================================================
-
-export interface ParsedCommand {
-  type: 'claude_command' | 'bridge_command' | 'plain_text';
-  command?: string;
-  args?: string;
-  rawText: string;
-}
 
 // ============================================================
 // 5.5 Project / Session Info
@@ -113,7 +36,8 @@ export interface ParsedCommand {
 
 export interface ProjectInfo {
   id: string;
-  projectPath: string;
+  projectPath: string;       // Claude metadata dir: ~/.claude/projects/<encoded>
+  workingDirectory: string;   // Actual project CWD decoded from id
   sessionCount: number;
   lastModified: Date;
 }
@@ -405,4 +329,103 @@ export interface SecurityConfig {
   allowedUserIds: string[];
   allowedTeamIds: string[];
   adminUserIds: string[];
+}
+
+// ============================================================
+// Phase 2: Persistent Process Types
+// ============================================================
+
+export type SessionState = 'not_started' | 'starting' | 'idle' | 'processing' | 'ending' | 'dead';
+
+export interface SessionStartParams {
+  sessionId: string;
+  model: string;
+  projectPath: string;
+  budgetUsd: number;
+  isResume: boolean;
+}
+
+export interface ControlMessage {
+  type: 'control';
+  subtype: 'set_model' | 'interrupt' | 'can_use_tool' | 'keep_alive' | 'set_permission_mode';
+  [key: string]: unknown;
+}
+
+export interface StdinUserMessage {
+  type: 'user';
+  message: {
+    role: 'user';
+    content: Array<{ type: 'text'; text: string }>;
+  };
+}
+
+export type StdinMessage = ControlMessage | StdinUserMessage;
+
+export interface StreamEvent {
+  type: 'assistant' | 'system' | 'user' | 'result';
+  subtype?: string;
+  [key: string]: unknown;
+}
+
+export interface ResultEvent extends StreamEvent {
+  type: 'result';
+  result?: string;
+  total_cost_usd?: number;
+  duration_ms?: number;
+  usage?: TokenUsage;
+  session_id?: string;
+}
+
+export interface SystemInitEvent extends StreamEvent {
+  type: 'system';
+  subtype: 'init';
+  session_id?: string;
+}
+
+// ============================================================
+// Phase 2: User Preferences
+// ============================================================
+
+export interface UserPreferences {
+  defaultModel: string;
+  activeDirectoryId: string | null;
+}
+
+export interface UserPreferenceFile {
+  version: 1;
+  users: Record<string, UserPreferences>;
+}
+
+// ============================================================
+// Phase 2: Session Index Types
+// ============================================================
+
+export interface SessionIndexEntry {
+  cliSessionId: string;
+  threadTs: string;
+  channelId: string;
+  userId: string;
+  projectPath: string;
+  name: string;
+  model: string;
+  status: 'active' | 'ended';
+  createdAt: string; // ISO
+  lastActiveAt: string; // ISO
+}
+
+export interface SessionIndexFile {
+  version: 1;
+  sessions: Record<string, SessionIndexEntry>; // keyed by cliSessionId
+}
+
+// ============================================================
+// Recent Session (Home Tab)
+// ============================================================
+
+export interface RecentSession {
+  sessionId: string;
+  projectPath: string;
+  mtime: Date;
+  firstPrompt: string;
+  firstPromptPreview: string;
 }

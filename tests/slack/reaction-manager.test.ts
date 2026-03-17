@@ -1,70 +1,100 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ReactionManager } from '../../src/slack/reaction-manager.js';
 
-describe('ReactionManager', () => {
-  function createMockClient() {
-    return {
-      reactions: {
-        add: vi.fn().mockResolvedValue({ ok: true }),
-        remove: vi.fn().mockResolvedValue({ ok: true }),
-      },
-    };
-  }
+function createMockClient() {
+  return {
+    reactions: {
+      add: vi.fn().mockResolvedValue({ ok: true }),
+      remove: vi.fn().mockResolvedValue({ ok: true }),
+    },
+  };
+}
 
-  it('should add processing reaction', async () => {
-    const client = createMockClient();
-    const rm = new ReactionManager(client as any);
+describe('ReactionManager (phase2)', () => {
+  let rm: ReactionManager;
+  let client: ReturnType<typeof createMockClient>;
 
-    await rm.addProcessing('D123', '1.000');
+  beforeEach(() => {
+    vi.useFakeTimers();
+    client = createMockClient();
+    rm = new ReactionManager(client as any);
+  });
 
-    expect(client.reactions.add).toHaveBeenCalledWith({
-      channel: 'D123',
-      timestamp: '1.000',
-      name: 'hourglass_flowing_sand',
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe('addSpawning', () => {
+    it('adds hourglass_flowing_sand reaction', async () => {
+      await rm.addSpawning('C001', '123');
+      expect(client.reactions.add).toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '123', name: 'hourglass_flowing_sand',
+      });
     });
   });
 
-  it('should replace processing with success', async () => {
-    const client = createMockClient();
-    const rm = new ReactionManager(client as any);
-
-    await rm.replaceWithSuccess('D123', '1.000');
-
-    expect(client.reactions.remove).toHaveBeenCalledWith({
-      channel: 'D123',
-      timestamp: '1.000',
-      name: 'hourglass_flowing_sand',
-    });
-    expect(client.reactions.add).toHaveBeenCalledWith({
-      channel: 'D123',
-      timestamp: '1.000',
-      name: 'white_check_mark',
+  describe('replaceWithProcessing', () => {
+    it('removes hourglass and adds brain', async () => {
+      await rm.replaceWithProcessing('C001', '123');
+      expect(client.reactions.remove).toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '123', name: 'hourglass_flowing_sand',
+      });
+      expect(client.reactions.add).toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '123', name: 'brain',
+      });
     });
   });
 
-  it('should replace processing with error', async () => {
-    const client = createMockClient();
-    const rm = new ReactionManager(client as any);
-
-    await rm.replaceWithError('D123', '1.000');
-
-    expect(client.reactions.remove).toHaveBeenCalledWith({
-      channel: 'D123',
-      timestamp: '1.000',
-      name: 'hourglass_flowing_sand',
+  describe('replaceWithDone', () => {
+    it('removes brain and adds check mark', async () => {
+      await rm.replaceWithDone('C001', '123');
+      expect(client.reactions.remove).toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '123', name: 'brain',
+      });
+      expect(client.reactions.add).toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '123', name: 'white_check_mark',
+      });
     });
-    expect(client.reactions.add).toHaveBeenCalledWith({
-      channel: 'D123',
-      timestamp: '1.000',
-      name: 'x',
+
+    it('does NOT auto-remove check mark after 3 seconds', async () => {
+      await rm.replaceWithDone('C001', '123');
+      client.reactions.remove.mockClear();
+      vi.advanceTimersByTime(5000);
+      await vi.runAllTimersAsync();
+      expect(client.reactions.remove).not.toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '123', name: 'white_check_mark',
+      });
     });
   });
 
-  it('should not throw on reaction api errors', async () => {
-    const client = createMockClient();
-    client.reactions.add.mockRejectedValue(new Error('already_reacted'));
-    const rm = new ReactionManager(client as any);
+  describe('replaceWithProcessing clears previous checkmark', () => {
+    it('removes previous checkmark when starting new processing', async () => {
+      await rm.replaceWithDone('C001', '100');
+      client.reactions.remove.mockClear();
+      client.reactions.add.mockClear();
+      await rm.replaceWithProcessing('C001', '200');
+      expect(client.reactions.remove).toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '100', name: 'white_check_mark',
+      });
+      expect(client.reactions.add).toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '200', name: 'brain',
+      });
+    });
 
-    await expect(rm.addProcessing('D123', '1.000')).resolves.not.toThrow();
+    it('works when there is no previous checkmark', async () => {
+      await rm.replaceWithProcessing('C001', '200');
+      expect(client.reactions.add).toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '200', name: 'brain',
+      });
+    });
+  });
+
+  describe('addQueued', () => {
+    it('adds hourglass_flowing_sand reaction', async () => {
+      await rm.addQueued('C001', '123');
+      expect(client.reactions.add).toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '123', name: 'hourglass_flowing_sand',
+      });
+    });
   });
 });

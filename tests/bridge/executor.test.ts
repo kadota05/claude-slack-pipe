@@ -52,6 +52,17 @@ describe('buildClaudeArgs', () => {
   });
 });
 
+describe('buildClaudeArgs with replay flag', () => {
+  it('includes --replay-user-messages when specified', () => {
+    const args = buildClaudeArgs(
+      { sessionId: 'sid', model: 'sonnet', projectPath: '/tmp' } as any,
+      false,
+      { replayUserMessages: true }
+    );
+    expect(args).toContain('--replay-user-messages');
+  });
+});
+
 describe('parseClaudeResult', () => {
   it('should parse valid success output', () => {
     const json = JSON.stringify({

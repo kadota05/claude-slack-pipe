@@ -1,67 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildAnchorBlocks,
-  buildCollapsedAnchorBlocks,
   buildErrorBlocks,
   buildResultBlocks,
+  buildResponseFooter,
+  buildThreadHeaderText,
+  buildStreamingBlocks,
+  buildHomeTabBlocks,
 } from '../../src/slack/block-builder.js';
-import type { SessionMetadata } from '../../src/types.js';
-
-const mockSession: SessionMetadata = {
-  sessionId: 'a1b2c3d4-e5f6-5789-abcd-ef0123456789',
-  threadTs: '1710567000.000100',
-  dmChannelId: 'D123',
-  projectPath: '/Users/user/dev/my-webapp',
-  name: 'my-webapp: implement auth',
-  model: 'opus',
-  status: 'active',
-  startTime: new Date('2026-03-16T14:30:00Z'),
-  totalCost: 0.23,
-  turnCount: 5,
-  totalInputTokens: 45000,
-  totalOutputTokens: 5000,
-  lastActiveAt: new Date(),
-  anchorCollapsed: false,
-};
-
-describe('buildAnchorBlocks', () => {
-  it('should return blocks with header, section, context, model select, actions, hint', () => {
-    const blocks = buildAnchorBlocks(mockSession);
-    expect(blocks.length).toBeGreaterThanOrEqual(6);
-    expect(blocks[0].type).toBe('header');
-    expect(blocks[0].text.text).toContain('my-webapp: implement auth');
-    expect(blocks[1].type).toBe('section');
-    expect(blocks[1].text.text).toContain(':large_green_circle:');
-
-    const modelBlock = blocks.find(
-      (b: any) => b.type === 'section' && b.accessory?.action_id === 'set_model',
-    );
-    expect(modelBlock).toBeDefined();
-    expect(modelBlock.accessory.initial_option.value).toBe('opus');
-
-    const actionsBlock = blocks.find(
-      (b: any) => b.type === 'actions' && b.block_id === 'session_controls',
-    );
-    expect(actionsBlock).toBeDefined();
-    expect(actionsBlock.elements.length).toBe(2);
-  });
-
-  it('should show ended status for ended session', () => {
-    const endedSession = { ...mockSession, status: 'ended' as const };
-    const blocks = buildAnchorBlocks(endedSession);
-    expect(blocks[1].text.text).toContain(':white_circle:');
-  });
-});
-
-describe('buildCollapsedAnchorBlocks', () => {
-  it('should return single section with expand button', () => {
-    const blocks = buildCollapsedAnchorBlocks(mockSession);
-    expect(blocks.length).toBe(1);
-    expect(blocks[0].type).toBe('section');
-    expect(blocks[0].accessory.action_id).toBe('toggle_anchor');
-    expect(blocks[0].accessory.value).toBe('expand');
-  });
-});
 
 describe('buildErrorBlocks', () => {
   it('should build error message with retry button', () => {
@@ -99,5 +44,124 @@ describe('buildResultBlocks', () => {
 
     const contextBlock = blocks.find((b: any) => b.type === 'context');
     expect(contextBlock).toBeDefined();
+  });
+});
+
+describe('buildResponseFooter', () => {
+  it('formats tokens, ctx, model, and duration', () => {
+    const blocks = buildResponseFooter({
+      inputTokens: 1200,
+      outputTokens: 3400,
+      contextUsed: 55500,
+      contextWindow: 1_000_000,
+      model: 'sonnet',
+      durationMs: 12300,
+    });
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe('context');
+    const text = (blocks[0] as any).elements[0].text;
+    expect(text).toContain('in:1.2k');
+    expect(text).toContain('out:3.4k');
+    expect(text).toContain('ctx 55.5k/1M');
+    expect(text).toContain('sonnet');
+    expect(text).toContain('12.3s');
+  });
+
+  it('shows 200k context window for haiku', () => {
+    const blocks = buildResponseFooter({
+      inputTokens: 0, outputTokens: 0, contextUsed: 62000, contextWindow: 200_000, model: 'haiku', durationMs: 500,
+    });
+    const text = (blocks[0] as any).elements[0].text;
+    expect(text).toContain('200k');
+    expect(text).toContain('ctx 62.0k/200k(31.0%)');
+  });
+});
+
+describe('buildThreadHeaderText', () => {
+  it('includes Dir with code block and ID with code block, no model', () => {
+    const text = buildThreadHeaderText({
+      projectPath: '/Users/alice/dev/myapp',
+      model: 'sonnet',
+      sessionId: 'abc12345',
+    });
+    expect(text).toContain('Dir: `/Users/alice/dev/myapp`');
+    expect(text).toContain('ID: `abc12345`');
+    expect(text).not.toContain('sonnet');
+    expect(text).toContain('*Session Started*');
+  });
+});
+
+describe('buildStreamingBlocks', () => {
+  it('builds blocks for partial assistant text', () => {
+    const blocks = buildStreamingBlocks({ text: 'Thinking about...', isComplete: false });
+    expect(blocks.length).toBeGreaterThan(0);
+    const textBlock = blocks.find((b: any) => b.type === 'section');
+    expect(textBlock).toBeDefined();
+  });
+
+  it('does not show progress indicator when complete', () => {
+    const blocks = buildStreamingBlocks({ text: 'Final answer', isComplete: true });
+    const ctx = blocks.find((b: any) => b.type === 'context' && b.elements?.[0]?.text?.includes('応答中'));
+    expect(ctx).toBeUndefined();
+  });
+});
+
+describe('buildHomeTabBlocks', () => {
+  const defaultParams = {
+    model: 'sonnet',
+    directoryId: 'myapp',
+    directories: [
+      { id: 'myapp', name: 'myapp', path: '/home/user/myapp' },
+      { id: 'other', name: 'other', path: '/home/user/other' },
+    ],
+    recentSessions: [
+      { timeAgo: '2h ago', firstPromptPreview: 'fix-auth-bug', projectPath: '/home/user/myapp' },
+    ],
+  };
+
+  it('includes model selector as first block', () => {
+    const blocks = buildHomeTabBlocks(defaultParams);
+    const modelSection = blocks.find((b: any) =>
+      b.accessory?.action_id === 'home_set_default_model'
+    );
+    expect(modelSection).toBeDefined();
+  });
+
+  it('includes model static_select', () => {
+    const blocks = buildHomeTabBlocks(defaultParams);
+    const modelSection = blocks.find((b: any) =>
+      b.accessory?.action_id === 'home_set_default_model'
+    );
+    expect(modelSection).toBeDefined();
+  });
+
+  it('includes directory static_select', () => {
+    const blocks = buildHomeTabBlocks(defaultParams);
+    const dirSection = blocks.find((b: any) =>
+      b.accessory?.action_id === 'home_set_directory'
+    );
+    expect(dirSection).toBeDefined();
+  });
+
+
+  it('includes recent session', () => {
+    const blocks = buildHomeTabBlocks(defaultParams);
+    const found = blocks.some((b: any) =>
+      JSON.stringify(b).includes('fix-auth-bug')
+    );
+    expect(found).toBe(true);
+  });
+
+  it('stays within 100 block limit', () => {
+    const blocks = buildHomeTabBlocks(defaultParams);
+    expect(blocks.length).toBeLessThanOrEqual(100);
+  });
+
+  it('shows no recent sessions message when empty', () => {
+    const blocks = buildHomeTabBlocks({ ...defaultParams, recentSessions: [] });
+    const found = blocks.some((b: any) =>
+      JSON.stringify(b).includes('No recent sessions')
+    );
+    expect(found).toBe(true);
   });
 });

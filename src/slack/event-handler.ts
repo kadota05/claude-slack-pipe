@@ -1,5 +1,4 @@
-import { parseCommand } from './command-parser.js';
-import type { ParsedCommand } from '../types.js';
+import { parseCommand, type ParsedCommand } from './command-parser.js';
 import { logger } from '../utils/logger.js';
 
 export interface SlackMessageEvent {
@@ -19,7 +18,7 @@ export function classifyMessage(event: SlackMessageEvent): MessageClassification
   if (!event.text || event.text.trim() === '') return 'ignore';
 
   const parsed = parseCommand(event.text);
-  if (parsed.type === 'bridge_command' || parsed.type === 'claude_command') {
+  if (parsed.type === 'bot_command' || parsed.type === 'passthrough') {
     return 'command';
   }
 

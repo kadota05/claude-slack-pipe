@@ -1,8 +1,6 @@
-import { v5 as uuidv5 } from 'uuid';
+import { randomUUID } from 'node:crypto';
 import type { SessionMetadata, ModelChoice } from '../types.js';
 import { logger } from '../utils/logger.js';
-
-const NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 
 export interface CreateSessionInput {
   threadTs: string;
@@ -15,12 +13,8 @@ export interface CreateSessionInput {
 export class SessionStore {
   private sessions = new Map<string, SessionMetadata>();
 
-  threadTsToSessionId(threadTs: string): string {
-    return uuidv5(threadTs, NAMESPACE);
-  }
-
   create(input: CreateSessionInput): SessionMetadata {
-    const sessionId = this.threadTsToSessionId(input.threadTs);
+    const sessionId = randomUUID();
     const now = new Date();
 
     const session: SessionMetadata = {
@@ -37,7 +31,6 @@ export class SessionStore {
       totalInputTokens: 0,
       totalOutputTokens: 0,
       lastActiveAt: now,
-      anchorCollapsed: false,
     };
 
     this.sessions.set(sessionId, session);
@@ -50,8 +43,10 @@ export class SessionStore {
   }
 
   findByThreadTs(threadTs: string): SessionMetadata | undefined {
-    const sessionId = this.threadTsToSessionId(threadTs);
-    return this.sessions.get(sessionId);
+    for (const session of this.sessions.values()) {
+      if (session.threadTs === threadTs) return session;
+    }
+    return undefined;
   }
 
   update(sessionId: string, fields: Partial<SessionMetadata>): SessionMetadata | undefined {
