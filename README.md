@@ -30,18 +30,16 @@ SlackでボットにDMを送ると、バックエンドで `claude` CLIが長期
 Slack左サイドバーからボットの「ホーム」タブを開きます。
 
 ```
-┌─ Home Tab ────────────────────────────┐
-│                                       │
-│  Model:     [Sonnet ▾]               │
-│  Directory: [dev/my-project ▾]       │
-│                                       │
-│  ── Recent Sessions ──                │
-│  「このバグを調査して」  5m ago       │
-│   📁 /Users/me/dev/my-project        │
-│  ────────────────────                 │
-│  「READMEを更新して」   2h ago        │
-│   📁 /Users/me/dev/other-project     │
-└───────────────────────────────────────┘
+┌─ Home Tab ──────────────────────────────────────────────┐
+│                                                         │
+│  Model:     [Sonnet ▾]                                 │
+│  Directory: [dev/my-project ▾]                         │
+│                                                         │
+│  ── Recent Sessions ──                                  │
+│  「このバグを調査して」 🕐 5m ago | 📁 dev/my-project  │
+│  ─────────────────────────────────────────              │
+│  「READMEを更新して」  🕐 2h ago | 📁 dev/other-proj   │
+└─────────────────────────────────────────────────────────┘
 ```
 
 - **Model** — Claude のモデルを選択（Opus / Sonnet / Haiku）
@@ -96,15 +94,15 @@ Slack左サイドバーからボットの「ホーム」タブを開きます。
 
 ### 4. ブリッジコマンド
 
-`cc` プレフィックスでBridge固有のコマンドを実行できます。
+`cc /コマンド` または `/コマンド`（bare slash）でコマンドを実行できます。
 
 | コマンド | 説明 |
 |----------|------|
-| `cc /status` | 現在のセッション情報（モデル、コスト、ターン数など）を表示 |
-| `cc /end` | セッションを終了 |
-| `cc /restart` | セッションを再起動 |
+| `cc /status` or `/status` | 現在のセッション情報（モデル、コスト、ターン数など）を表示 |
+| `cc /end` or `/end` | セッションを終了 |
+| `cc /restart` or `/restart` | セッションを再起動 |
 
-Claude Codeのスラッシュコマンド（`cc /commit` など）もそのまま転送されます。
+上記以外のスラッシュコマンド（`/commit`, `/help` など）はClaude CLIにそのまま転送されます。
 
 ### 5. ツール実行の詳細表示
 
@@ -222,12 +220,12 @@ not_started → starting → processing ⇄ idle → ending → dead
                               │
                          [🔴 中断] → idle
                               │
-                         [クラッシュ] → dead → auto-respawn (最大3回)
+                         [クラッシュ] → dead
 ```
 
 - **idle** — ユーザー入力待ち。5分ごとにKeep-Alive ping、10分で自動終了
 - **processing** — Claude実行中。ユーザーが追加メッセージを送るとキュー（最大5件）に入る
-- **auto-respawn** — 処理中にクラッシュした場合、指数バックオフ(1s, 2s, 4s)で自動再起動
+- **dead** — プロセス終了。次のメッセージ送信時にセッションが再作成される
 
 ---
 
@@ -278,6 +276,8 @@ cp .env.example .env
 | `ALLOWED_TEAM_IDS` | | 許可チームID（カンマ区切り） | 空 |
 | `ADMIN_USER_IDS` | | 管理者ユーザーID | 空 |
 | `CLAUDE_EXECUTABLE` | | Claude CLIのパス | `claude` |
+| `CLAUDE_PROJECTS_DIR` | | Claudeプロジェクトのディレクトリ | `~/.claude/projects` |
+| `DATA_DIR` | | データ保存ディレクトリ | `~/.claude-slack-pipe/` |
 | `MAX_CONCURRENT_PER_USER` | | ユーザーごと同時実行数 | `1` |
 | `MAX_CONCURRENT_GLOBAL` | | 全体同時実行数 | `3` |
 | `LOG_LEVEL` | | ログレベル | `info` |
