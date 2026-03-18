@@ -3,6 +3,8 @@ import { logger } from '../utils/logger.js';
 import { getToolOneLiner } from './tool-formatter.js';
 import { convertMarkdownToMrkdwn } from './markdown-converter.js';
 import { GroupTracker } from './group-tracker.js';
+import { TunnelManager } from './tunnel-manager.js';
+import { extractLocalUrls, rewriteLocalUrls } from './localhost-rewriter.js';
 import type {
   SlackAction,
   ProcessedActions,
@@ -14,11 +16,13 @@ interface StreamProcessorConfig {
   channel: string;
   threadTs: string;
   sessionId: string;
+  tunnelManager?: TunnelManager;
 }
 
 export class StreamProcessor {
   private readonly config: StreamProcessorConfig;
   private readonly groupTracker: GroupTracker;
+  private readonly tunnelManager?: TunnelManager;
   private textBuffer = '';
   private textMessageTs: string | null = null;
   private mainToolUseCount = 0;
@@ -26,6 +30,7 @@ export class StreamProcessor {
   constructor(config: StreamProcessorConfig) {
     this.config = config;
     this.groupTracker = new GroupTracker();
+    this.tunnelManager = config.tunnelManager;
   }
 
   processEvent(event: any): ProcessedActions {
