@@ -341,7 +341,6 @@ export interface SessionStartParams {
   sessionId: string;
   model: string;
   projectPath: string;
-  budgetUsd: number;
   isResume: boolean;
 }
 

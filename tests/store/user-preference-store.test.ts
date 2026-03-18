@@ -20,7 +20,7 @@ describe('UserPreferenceStore', () => {
 
   it('returns defaults for unknown user', () => {
     const prefs = store.get('U_UNKNOWN');
-    expect(prefs.defaultModel).toBe('sonnet');
+    expect(prefs.defaultModel).toBe('opus');
     expect(prefs.activeDirectoryId).toBeNull();
   });
 

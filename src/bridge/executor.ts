@@ -16,7 +16,6 @@ export interface BuildArgsSession {
 }
 
 export interface BuildArgsOptions {
-  budgetUsd?: number;
   replayUserMessages?: boolean;
 }
 
@@ -44,9 +43,7 @@ export function buildClaudeArgs(
     args.push('--session-id', session.sessionId);
   }
 
-  if (opts?.budgetUsd !== undefined) {
-    args.push('--max-budget-usd', String(opts.budgetUsd));
-  }
+  // No budget limit — run without --max-budget-usd
 
   if (opts?.replayUserMessages) {
     args.push('--replay-user-messages');

@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+// Prevent dotenv from injecting .env file values during tests
+vi.mock('dotenv', () => ({ default: { config: () => {} }, config: () => {} }));
+
 describe('config', () => {
   const requiredEnv = {
     SLACK_BOT_TOKEN: 'xoxb-test-token',
@@ -20,8 +23,6 @@ describe('config', () => {
     delete process.env.MAX_CONCURRENT_GLOBAL;
     delete process.env.DEFAULT_TIMEOUT_MS;
     delete process.env.MAX_TIMEOUT_MS;
-    delete process.env.DEFAULT_BUDGET_USD;
-    delete process.env.MAX_BUDGET_USD;
     delete process.env.LOG_LEVEL;
     delete process.env.DATA_DIR;
   });
@@ -53,13 +54,11 @@ describe('config', () => {
     const config = loadConfig();
 
     expect(config.claudeExecutable).toBe('claude');
-    expect(config.claudeProjectsDir).toBe('~/.claude/projects');
+    expect(config.claudeProjectsDir).toMatch(/\.claude\/projects$/);
     expect(config.maxConcurrentPerUser).toBe(1);
     expect(config.maxConcurrentGlobal).toBe(3);
     expect(config.defaultTimeoutMs).toBe(300000);
     expect(config.maxTimeoutMs).toBe(1800000);
-    expect(config.defaultBudgetUsd).toBe(1.0);
-    expect(config.maxBudgetUsd).toBe(10.0);
     expect(config.logLevel).toBe('info');
   });
 

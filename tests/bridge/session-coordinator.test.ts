@@ -57,7 +57,6 @@ describe('SessionCoordinator', () => {
       userId: 'U001',
       model: 'sonnet',
       projectPath: '/tmp/test',
-      budgetUsd: 1.0,
       isResume: false,
     });
     expect(session).toBeDefined();
@@ -70,7 +69,6 @@ describe('SessionCoordinator', () => {
       userId: 'U001',
       model: 'sonnet',
       projectPath: '/tmp/test',
-      budgetUsd: 1.0,
       isResume: false,
     };
     const s1 = await coordinator.getOrCreateSession(params);
@@ -84,7 +82,6 @@ describe('SessionCoordinator', () => {
       userId: 'U001',
       model: 'sonnet',
       projectPath: '/tmp/test',
-      budgetUsd: 1.0,
       isResume: false,
     });
     vi.advanceTimersByTime(20);
@@ -94,7 +91,6 @@ describe('SessionCoordinator', () => {
       userId: 'U001',
       model: 'sonnet',
       projectPath: '/tmp/test2',
-      budgetUsd: 1.0,
       isResume: false,
     });
     expect(s1.end).toHaveBeenCalled();
@@ -106,7 +102,6 @@ describe('SessionCoordinator', () => {
       userId: 'U001',
       model: 'sonnet',
       projectPath: '/tmp/test',
-      budgetUsd: 1.0,
       isResume: false,
     });
     expect(coordinator.getAliveCount()).toBe(1);
@@ -118,7 +113,6 @@ describe('SessionCoordinator', () => {
       userId: 'U001',
       model: 'sonnet',
       projectPath: '/tmp/test',
-      budgetUsd: 1.0,
       isResume: false,
     });
     coordinator.broadcastControl({ type: 'control', subtype: 'set_model', model: 'opus' });

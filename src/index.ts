@@ -243,7 +243,6 @@ async function main(): Promise<void> {
           userId,
           model: prefs.defaultModel,
           projectPath,
-          budgetUsd: config.defaultBudgetUsd,
           isResume: false,
         });
 
@@ -303,7 +302,6 @@ async function main(): Promise<void> {
               userId,
               model: preferredModel,
               projectPath: indexEntry.projectPath,
-              budgetUsd: config.defaultBudgetUsd,
               isResume: true,
             });
           } else {
@@ -316,7 +314,6 @@ async function main(): Promise<void> {
             userId,
             model: preferredModel,
             projectPath: indexEntry.projectPath,
-            budgetUsd: config.defaultBudgetUsd,
             isResume: true,
           });
         }

@@ -25,7 +25,6 @@ describe('SessionStartParams type', () => {
       sessionId: 'sess-123',
       model: 'opus',
       projectPath: '/tmp/project',
-      budgetUsd: 5.0,
       isResume: false,
     };
     expect(params.sessionId).toBe('sess-123');

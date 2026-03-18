@@ -34,7 +34,6 @@ describe('PersistentSession', () => {
       sessionId: 'test-session-id',
       model: 'sonnet',
       projectPath: '/tmp/test-project',
-      budgetUsd: 1.0,
       isResume: false,
     });
   });
@@ -74,7 +73,6 @@ describe('PersistentSession', () => {
       sessionId: 'resume-id',
       model: 'opus',
       projectPath: '/tmp/test',
-      budgetUsd: 1.0,
       isResume: true,
     });
     resumeSession.spawn();

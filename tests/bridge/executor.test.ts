@@ -33,11 +33,9 @@ describe('buildClaudeArgs', () => {
     expect(args).not.toContain('--session-id');
   });
 
-  it('should include budget when specified', () => {
-    const args = buildClaudeArgs(baseSession, false, { budgetUsd: 5.0 });
-
-    expect(args).toContain('--max-budget-usd');
-    expect(args).toContain('5');
+  it('should not include budget flag', () => {
+    const args = buildClaudeArgs(baseSession, false);
+    expect(args).not.toContain('--max-budget-usd');
   });
 
   it('should map model names to short names', () => {

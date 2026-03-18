@@ -3,3 +3,10 @@ dist/
 .env
 *.js
 !vitest.config.ts
+
+# Development artifacts
+.superpowers/
+detailed-analysis.md
+final-recommendation.md
+docs/superpowers/
+test/race-condition-proof.ts
