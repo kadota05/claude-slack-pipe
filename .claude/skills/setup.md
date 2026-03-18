@@ -45,8 +45,19 @@ claude --version
   - 許可されたら実行: `npm install -g @anthropic-ai/claude-code`
   - **許可なしに自動実行しないこと。環境構築に関わるインストールは必ずユーザーの許可を得る。**
 
+### cloudflared (Cloudflare Tunnel CLI)
+```bash
+cloudflared --version
+```
+- インストールされていればOK
+- 未インストールの場合：
+  - 「cloudflaredがインストールされていません。localhostトンネル機能に必要です。インストールしてよいですか？」と**必ず許可を求める**
+  - 許可されたら実行: `brew install cloudflared`
+  - アカウント登録不要
+  - **許可なしに自動実行しないこと。**
+
 ### 成功条件
-両方のバージョンが要件を満たしていること。
+すべてのバージョンが要件を満たしていること。
 
 ---
 
