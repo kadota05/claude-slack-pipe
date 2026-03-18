@@ -1,156 +1,83 @@
 # Claude Code Slack Bridge
 
-SlackのDMからClaude Codeを操作するブリッジ。Node.jsプロセスがSlack BoltとClaude CLI子プロセスをstdin/stdoutで接続し、ターミナルのClaude Code体験をそのままSlack上で再現します。
+SlackのDMから、自分のPCで動いているClaude Code CLIを直接操作できるツールです。
 
-DMを送るだけでセッションが始まり、ツール実行や思考過程がリアルタイムにスレッドへストリーミングされます。
-
-```
-You: このバグを調査して
-  💭×2 🔧×3 (1.2s)
-  💬 「調査結果です。原因は...」
-  💭×1 🔧×5 (3.4s)
-  💬 「修正しました」
-  📊 Tokens: 12,345 | $0.15 | 45s
-
-You: テストも書いて    ← 同じスレッドで文脈を保持
-```
-
----
-
-## 使い方
-
-### ホームタブで準備する
-
-ボットのホームタブを開くと、モデル（Opus / Sonnet / Haiku）と作業ディレクトリの選択ができます。ディレクトリはClaude Codeのプロジェクト一覧から自動取得されます。直近のセッション履歴もここに表示されるので、過去の作業をすぐに確認できます。
-
-### メッセージタブで対話する
-
-設定が終わったら、ボットにDMを送るだけ。返信はスレッドに届きます。**1スレッド＝1セッション**の設計なので、同じスレッドでやりとりを続ければ文脈が保持されます。新しいDMを送れば、新しいセッションが始まります。
-
-Claudeがツールを使うと `💭×2 🔧×3 (1.2s)` のようにバンドル表示されます。「ツール実行詳細」ボタンから、各ツールの入出力や思考内容をモーダルで確認できます。
-
-### リアクションで状態を知る
-
-処理中はメッセージにリアクションがつき、今何が起きているかが一目でわかります。
-
-⏳ 起動中 → 🧠 処理中 → ✅ 完了
-
-前の3つはシステムが自動でつけるものです。**中断したいときは**、🧠がついている自分のメッセージに 🔴 をつけてください。Claudeに SIGINT が送られ、処理が中断されます。
-
-### コマンド
-
-`cc /コマンド` または `/コマンド` で実行できます。
-
-| コマンド | 説明 |
-|----------|------|
-| `/status` | セッション情報（モデル、コスト、ターン数）を表示 |
-| `/end` | セッションを終了 |
-| `/restart` | セッションを再起動 |
-
-上記以外のスラッシュコマンド（`/commit`, `/help` など）はClaude CLIにそのまま転送されます。
+つまり**スマホからClaude Codeが使えます**。PCを開けないとき——旅行中、散歩中、満員電車の中など、あらゆる外出先からコードの調査・修正・生成を指示できます。
 
 ---
 
 ## セットアップ
 
-### 自動セットアップ（推奨）
-
-Claude Codeでこのプロジェクトを開き、「**セットアップして**」と言ってください。対話形式で全セットアップが完了します。
-
-### 手動セットアップ
-
-#### 前提条件
-
-- **Node.js 20+**
-- **Claude Code CLI** — `claude` コマンドがPATHに通っている状態
-
-#### 1. Slack Appの作成
-
-1. https://api.slack.com/apps → **Create New App** → **From an app manifest**
-2. Workspaceを選択 → **JSON** タブに切り替え
-3. `docs/tips/slack-app-manifest.json` の内容を貼り付け → **Create**
-
-> Slack Appをワークスペースにインストールすると、メンバー全員のサイドバーに表示されます。個人用ワークスペースでの導入を推奨します。
-
-#### 2. トークンの取得
-
-- **App-Level Token** — Settings → Basic Information → App-Level Tokens → Generate（`connections:write` スコープ）
-- **Bot Token** — Features → OAuth & Permissions → Install to Workspace → Bot User OAuth Token
-
-#### 3. インストールと起動
-
-```bash
-git clone <repo-url> && cd claude-slack-pipe
-npm install
-cp .env.example .env
-# .env を編集してトークンを設定（次のセクション参照）
-npm run dev
-```
-
-`Claude Code Slack Bridge is running` と表示されれば成功です。
-
-#### 環境変数
-
-| 変数名 | 必須 | 説明 | デフォルト |
-|--------|------|------|-----------|
-| `SLACK_BOT_TOKEN` | ✅ | Bot User OAuth Token (`xoxb-`) | — |
-| `SLACK_APP_TOKEN` | ✅ | App-Level Token (`xapp-`) | — |
-| `ALLOWED_USER_IDS` | | 許可ユーザーID（カンマ区切り） | 空（全員許可） |
-| `ALLOWED_TEAM_IDS` | | 許可チームID（カンマ区切り） | 空 |
-| `ADMIN_USER_IDS` | | 管理者ユーザーID | 空 |
-| `CLAUDE_EXECUTABLE` | | Claude CLIのパス | `claude` |
-| `CLAUDE_PROJECTS_DIR` | | Claudeプロジェクトのディレクトリ | `~/.claude/projects` |
-| `DATA_DIR` | | データ保存ディレクトリ | `~/.claude-slack-pipe/` |
-| `MAX_CONCURRENT_PER_USER` | | ユーザーごと同時実行数 | `1` |
-| `MAX_CONCURRENT_GLOBAL` | | 全体同時実行数 | `3` |
-| `LOG_LEVEL` | | ログレベル | `info` |
+Claude Codeでこのプロジェクトを開いて、「**セットアップして**」と言ってください。
+対話形式でインストールと設定ファイルの生成が完了します。
 
 ---
 
-## アーキテクチャ
+## 使い方
 
-全体は3層構造です。
+### 1. ホームタブで準備する
 
-```
-Slack ←― WebSocket ―→ Node.js (Bolt) ←― stdin/stdout ―→ claude -p (子プロセス)
-```
+ボットのホームタブを開いて、**モデル**（Opus / Sonnet / Haiku）と**作業ディレクトリ**をドロップダウンから選びます。作業ディレクトリはClaude Codeのプロジェクト一覧から自動取得されます。
 
-Node.jsプロセスがSlack Boltでイベントを受信し、Claude CLIの子プロセスにJSON形式でプロンプトを転送します。CLIの出力はJSONLストリームとしてstdoutに流れ、それをリアルタイムに解析してSlackメッセージとして投稿・更新します。
+### 2. メッセージタブでプロンプトを送る
 
-セッションはスレッドごとに1つのCLI子プロセスに対応します。ユーザーがスレッドにメッセージを送るたびに、同じプロセスのstdinに書き込むことで文脈が保持されます。アイドル状態が10分続くと自動終了し、次のメッセージ時に新しいプロセスが起動します。
+ボットにDMを送るだけです。
 
-### モジュール構成
+### 3. リアクションで進捗を確認する
 
-| ディレクトリ | 役割 |
-|-------------|------|
-| `src/bridge/` | CLIプロセス管理。セッション調整、メッセージキュー |
-| `src/streaming/` | ストリーミング処理。JSONL解析、バンドルグループ化、Slack API実行 |
-| `src/slack/` | Slack UI。ホームタブ、リアクション、モーダル、コマンド |
-| `src/store/` | データ永続化。セッション、ユーザー設定、プロジェクト一覧 |
-| `src/middleware/` | 認証、レートリミッター |
-| `src/utils/` | ロガー、エラー型、サニタイズ、PIDロック |
+送ったメッセージにリアクションが自動でつきます。
 
----
+| リアクション | 意味 |
+|:---:|---|
+| ⏳ | Slackのメッセージをローカルの親プロセス（Node.js）が受け取って、子プロセス（Claude CLI）にプロンプトを渡す準備をしています |
+| 🧠 | Claude CLIがプロンプトを受け取って処理を実行しています |
+| ✅ | 処理が完了しました |
 
-## トラブルシューティング
+### 4. 処理を中断したいとき
 
-| 症状 | 確認事項 |
-|------|---------|
-| 接続できない | Socket Modeが有効か、`SLACK_APP_TOKEN` (`xapp-`) が正しいか |
-| メッセージに反応しない | Event Subscriptionsで `message.im` を購読しているか |
-| 権限エラー | `ALLOWED_USER_IDS` に自分のUser IDが含まれているか |
-| Claude CLIが見つからない | `claude --version` が実行できるか |
-| 起動直後にENOENTエラー | Claude CLIのバージョン不一致の可能性 |
+🧠がついている自分のメッセージに 🔴 リアクション（「あか」で変換すると出てきます）をつけると、処理がストップします。
+
+### 5. スレッドとコンテキストについて
+
+AIは、あなたが立ち上げたスレッドに返信する形で回答します。**コンテキストはスレッド内で完結**していて、スレッド間では分断されています。
+
+例えば別のスレッドで「さっきのスレッドで言ったことについて検討して」と言っても、AIにはその文脈が見えないので理解できません。新しいDMを送ると新しいスレッド（＝新しいセッション）が始まります。
 
 ---
 
-## 開発
+## 注意事項
 
-```bash
-npm test           # テスト実行
-npm run test:watch # テスト（watchモード）
-npm run lint       # 型チェック
-npm run build      # ビルド
+- **ファイル・画像の添付は未対応です。** 必ずテキストだけ送ってください
+- **Permission modeは最強設定です。** 常に bypass permissions on になっているイメージです。Slack経由では承認/拒否の対話ができないため、仕様上こうなっています。気をつけてください
+- **スラッシュコマンドは使えません。** Slack上で `/なんたら` と打つとSlack側のコマンドとして解釈されてエラーになります。カスタムコマンドは検討中でまだ対応していません。スキルを使いたい場合は「superpowersのbrainstormingスキルを使って」のようにテキストで指示してください
+
+---
+
+## 今後の対応予定
+
+- カスタムスラッシュコマンド
+- チャンネルへの追加
+
+---
+
+## 仕組み
+
+```mermaid
+graph LR
+    subgraph Slack Cloud
+        A[DM送信]
+        F[結果表示]
+    end
+
+    subgraph ローカルPC
+        B[Node.js<br/>親プロセス]
+        D[Claude CLI<br/>子プロセス]
+    end
+
+    A -- "Socket Mode<br/>(WebSocket)" --> B
+    B -- "メッセージ整形<br/>→ stdin" --> D
+    D -- "stdout<br/>→ 結果" --> B
+    B -- "Slack形式に変換<br/>→ Slack API" --> F
 ```
 
-**技術スタック:** TypeScript, Slack Bolt (Socket Mode), Claude Code CLI, Winston, Zod, Vitest
+ローカルPCで立ち上げたNode.jsプロセス（親プロセス）が、Socket ModeでSlackと繋がっています。Slackから来たメッセージを整形して、`claude -p`（stdin/stdoutでClaude CLIを使えるコマンド）の子プロセスにstdinで渡します。結果がstdoutで返ってくるので、Slackで表示できる形に変換してAPIで投稿します。
