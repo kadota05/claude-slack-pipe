@@ -42,3 +42,27 @@ export function extractLocalUrls(text: string): LocalUrl[] {
 
   return results;
 }
+
+export function rewriteLocalUrls(
+  text: string,
+  urlMap: Map<string, string>
+): string {
+  if (urlMap.size === 0) return text;
+
+  // Sort by URL length descending to avoid partial match issues
+  // e.g. "http://localhost:3000/path" before "http://localhost:3000"
+  const sortedEntries = [...urlMap.entries()].sort(
+    (a, b) => b[0].length - a[0].length
+  );
+
+  let result = text;
+  for (const [originalUrl, tunnelUrl] of sortedEntries) {
+    // Replace all occurrences
+    result = result.replaceAll(
+      originalUrl,
+      `\`${originalUrl}\`（<${tunnelUrl}|Slackからはこちら>）`
+    );
+  }
+
+  return result;
+}
