@@ -127,7 +127,7 @@ export class StreamProcessor {
     this.textBuffer += text;
 
     if (this.tunnelManager) {
-      const localUrls = extractLocalUrls(this.textBuffer);
+      const localUrls = extractLocalUrls(text);
       for (const { port } of localUrls) {
         // Fire-and-forget: start tunnel in parallel
         this.tunnelManager.startTunnel(port);
