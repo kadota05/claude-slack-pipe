@@ -27,6 +27,7 @@ import { SerialActionQueue } from './streaming/serial-action-queue.js';
 import { SessionJsonlReader } from './streaming/session-jsonl-reader.js';
 import { SubagentJsonlReader } from './streaming/subagent-jsonl-reader.js';
 import { RecentSessionScanner } from './store/recent-session-scanner.js';
+import { TunnelManager } from './streaming/tunnel-manager.js';
 
 function waitForIdle(session: PersistentSession, timeoutMs = 300000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -68,6 +69,8 @@ async function main(): Promise<void> {
   const sessionIndexStore = new SessionIndexStore(config.dataDir);
 
   const recentSessionScanner = new RecentSessionScanner(config.claudeProjectsDir);
+
+  const tunnelManager = new TunnelManager();
 
   // Initialize process coordination
   const coordinator = new SessionCoordinator({
@@ -406,6 +409,7 @@ async function main(): Promise<void> {
       channel: channelId,
       threadTs,
       sessionId: session.sessionId,
+      tunnelManager,
     });
     const serialQueue = new SerialActionQueue();
 
@@ -814,6 +818,7 @@ async function main(): Promise<void> {
     for (const entry of sessionIndexStore.getActive()) {
       coordinator.endSession(entry.cliSessionId);
     }
+    tunnelManager.stopAll();
     pidLock.release();
     await app.stop();
     process.exit(0);
