@@ -1,6 +1,6 @@
 // tests/streaming/localhost-rewriter.test.ts
 import { describe, it, expect } from 'vitest';
-import { isPrivateIp } from '../../src/streaming/localhost-rewriter.js';
+import { isPrivateIp, extractLocalUrls } from '../../src/streaming/localhost-rewriter.js';
 
 describe('isPrivateIp', () => {
   it('returns true for localhost', () => {
@@ -36,5 +36,49 @@ describe('isPrivateIp', () => {
   it('returns false for public IPs', () => {
     expect(isPrivateIp('8.8.8.8')).toBe(false);
     expect(isPrivateIp('203.0.113.1')).toBe(false);
+  });
+});
+
+describe('extractLocalUrls', () => {
+  it('extracts localhost URL with port', () => {
+    const result = extractLocalUrls('Server running at http://localhost:3000');
+    expect(result).toEqual([{ url: 'http://localhost:3000', host: 'localhost', port: 3000 }]);
+  });
+
+  it('extracts localhost URL without port (defaults to 80)', () => {
+    const result = extractLocalUrls('Visit http://localhost');
+    expect(result).toEqual([{ url: 'http://localhost', host: 'localhost', port: 80 }]);
+  });
+
+  it('extracts URL with path', () => {
+    const result = extractLocalUrls('Open http://localhost:5173/dashboard');
+    expect(result).toEqual([{ url: 'http://localhost:5173/dashboard', host: 'localhost', port: 5173 }]);
+  });
+
+  it('extracts 127.0.0.1 URL', () => {
+    const result = extractLocalUrls('http://127.0.0.1:8080/api');
+    expect(result).toEqual([{ url: 'http://127.0.0.1:8080/api', host: '127.0.0.1', port: 8080 }]);
+  });
+
+  it('extracts private IP URL', () => {
+    const result = extractLocalUrls('http://192.168.1.10:3000');
+    expect(result).toEqual([{ url: 'http://192.168.1.10:3000', host: '192.168.1.10', port: 3000 }]);
+  });
+
+  it('ignores public IP URLs', () => {
+    const result = extractLocalUrls('http://8.8.8.8:3000');
+    expect(result).toEqual([]);
+  });
+
+  it('extracts multiple URLs', () => {
+    const result = extractLocalUrls('Frontend: http://localhost:3000 API: http://localhost:8080');
+    expect(result).toHaveLength(2);
+    expect(result[0].port).toBe(3000);
+    expect(result[1].port).toBe(8080);
+  });
+
+  it('returns empty for no URLs', () => {
+    const result = extractLocalUrls('No URLs here');
+    expect(result).toEqual([]);
   });
 });

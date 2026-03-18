@@ -3,6 +3,12 @@
 const LOCALHOST_URL_PATTERN =
   /https?:\/\/(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|0\.0\.0\.0|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?[^\s)]*/g;
 
+export interface LocalUrl {
+  url: string;
+  host: string;
+  port: number;
+}
+
 export function isPrivateIp(host: string): boolean {
   if (host === 'localhost' || host === '0.0.0.0') return true;
 
@@ -19,4 +25,20 @@ export function isPrivateIp(host: string): boolean {
   if (parts[0] === 192 && parts[1] === 168) return true;
 
   return false;
+}
+
+export function extractLocalUrls(text: string): LocalUrl[] {
+  const results: LocalUrl[] = [];
+  const regex = new RegExp(LOCALHOST_URL_PATTERN.source, 'g');
+
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const host = match[1];
+    if (!isPrivateIp(host)) continue;
+
+    const port = match[2] ? parseInt(match[2].slice(1), 10) : 80;
+    results.push({ url: match[0], host, port });
+  }
+
+  return results;
 }
