@@ -98,12 +98,12 @@ npm install
 
 ### ステップ2: マニフェストを貼り付け
 
-`docs/tips/slack-app-manifest.json` の内容をReadツールで読み取り、ユーザーに表示する。
+`slack-app-manifest.json` の内容をReadツールで読み取り、ユーザーに表示する。
 
 1. 上部の「**JSON**」タブをクリックしてください
 2. 既存の内容を全て削除し、以下のJSONを貼り付けてください：
 
-（ここにdocs/tips/slack-app-manifest.jsonの内容を表示する）
+（ここにslack-app-manifest.jsonの内容を表示する）
 
 3. 「**Next**」をクリック
 4. 内容を確認して「**Create**」をクリック
