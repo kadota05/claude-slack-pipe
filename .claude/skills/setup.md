@@ -215,7 +215,7 @@ npx tsx src/index.ts
 ### 起動失敗時の切り分け
 
 - `Invalid token` 系エラー → 「トークンが正しくない可能性があります。以下を確認してください：」と案内し、タスク5のトークン取得をやり直す
-- `ENOENT` エラー → 「Claude CLIのバージョン不一致の可能性があります」と案内。CLAUDE.mdの `/fix-claude-cli-version` を参照するよう案内する
+- `ENOENT` エラー → 「Claude CLIのバージョン不一致の可能性があります」と案内。CLAUDE.mdの `.claude/skills/fix-claude-cli-version.md` を参照するよう案内する
 - その他のエラー → エラー内容を表示して対処を案内する
 
 ### 完了案内
