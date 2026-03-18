@@ -434,8 +434,8 @@ async function main(): Promise<void> {
     session.on('message', (event: any) => {
       serialQueue.enqueue(async () => {
         try {
-          // 1. Process event synchronously — returns actions
-          const { bundleActions, textAction, resultEvent, mainApiCallCount } = streamProcessor.processEvent(event);
+          // 1. Process event — returns actions (async for tunnel URL rewriting)
+          const { bundleActions, textAction, resultEvent, mainApiCallCount } = await streamProcessor.processEvent(event);
 
           // 2. Execute bundle actions sequentially
           for (const ba of bundleActions) {

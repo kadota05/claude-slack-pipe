@@ -33,7 +33,7 @@ export class StreamProcessor {
     this.tunnelManager = config.tunnelManager;
   }
 
-  processEvent(event: any): ProcessedActions {
+  async processEvent(event: any): Promise<ProcessedActions> {
     const parentToolUseId = event.parent_tool_use_id || null;
     const result: ProcessedActions = { bundleActions: [] };
 
@@ -42,7 +42,7 @@ export class StreamProcessor {
     } else if (event.type === 'user' && event.message?.content) {
       this.handleUser(event.message.content, parentToolUseId, result);
     } else if (event.type === 'result') {
-      this.handleResult(event, result);
+      await this.handleResult(event, result);
     }
 
     return result;
@@ -215,10 +215,29 @@ export class StreamProcessor {
     result.bundleActions.push(...actions);
   }
 
-  private handleResult(event: any, result: ProcessedActions): void {
+  private async handleResult(event: any, result: ProcessedActions): Promise<void> {
     // Flush any active group
     const flushActions = this.groupTracker.flushActiveBundle(this.config.sessionId);
     result.bundleActions.push(...flushActions);
+
+    // Rewrite localhost URLs to tunnel URLs before final text conversion
+    if (this.tunnelManager && this.textBuffer) {
+      const localUrls = extractLocalUrls(this.textBuffer);
+      if (localUrls.length > 0) {
+        const urlMap = new Map<string, string>();
+        await Promise.all(
+          localUrls.map(async ({ url, port }) => {
+            const tunnelUrl = await this.tunnelManager!.startTunnel(port);
+            if (tunnelUrl) {
+              const parsed = new URL(url);
+              const path = parsed.pathname + parsed.search + parsed.hash;
+              urlMap.set(url, tunnelUrl + (path === '/' ? '' : path));
+            }
+          })
+        );
+        this.textBuffer = rewriteLocalUrls(this.textBuffer, urlMap);
+      }
+    }
 
     // Finalize text — post or update depending on whether already posted
     if (this.textBuffer) {
