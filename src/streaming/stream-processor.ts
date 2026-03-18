@@ -126,6 +126,14 @@ export class StreamProcessor {
   private handleText(text: string, result: ProcessedActions): void {
     this.textBuffer += text;
 
+    if (this.tunnelManager) {
+      const localUrls = extractLocalUrls(this.textBuffer);
+      for (const { port } of localUrls) {
+        // Fire-and-forget: start tunnel in parallel
+        this.tunnelManager.startTunnel(port);
+      }
+    }
+
     // Buffer short text — don't post or collapse yet.
     // Short intermediate text (e.g. "まず確認してみます。") before tool_use
     // would otherwise collapse the bundle too early and split ToolSearch →
