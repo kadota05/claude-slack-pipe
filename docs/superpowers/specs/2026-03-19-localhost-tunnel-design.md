@@ -25,19 +25,19 @@ Claude CLIがlocalhost上にWebアプリを起動した場合、スマホや別P
 Claude CLI出力（ストリーミング）
     |
 StreamProcessor（既存）
-    | localhost URL検知
+    | localhost URL検知（handleText内、textAction生成直前）
     |-> TunnelManager: cloudflaredでトンネル確立（並列）
     |
 テキスト最終更新時（resultイベント）
     | トンネルURL取得済み
-    |-> LocalhostRewriter: テキスト変換
+    |-> LocalhostRewriter: テキスト変換（convertMarkdownToMrkdwnの前に適用）
     |
 Slack API chat.update（既存フロー）
 ```
 
 ### 新規コンポーネント
 
-#### TunnelManager
+#### TunnelManager (`src/streaming/tunnel-manager.ts`)
 
 ポートごとに1つのcloudflaredプロセスを管理する。
 
@@ -52,18 +52,22 @@ TunnelManager {
 
 - 同じポートに対して重複してトンネルを張らない（既存トンネルがあればそのURLを返す）
 - `cloudflared tunnel --url localhost:{port}` を子プロセスとして起動
-- stdoutからトンネルURL（`https://xxx.trycloudflare.com`）をパースして取得
-- Bridgeプロセス終了時に `stopAll()` で全トンネルを停止
+- **stderrからトンネルURL**（`https://xxx.trycloudflare.com`）をパースして取得（cloudflaredはログをstderrに出力する）
+- 最大同時トンネル数: 5（超過時は最も古いトンネルを停止）
+- cloudflaredプロセスが異常終了した場合: URLマッピングを削除し、次回同じポートが参照された時に自動で再確立する。エラーはログに記録
+- Bridgeプロセス終了時に `stopAll()` で全トンネルを停止（`index.ts` の `shutdown` 関数内、セッション終了後・`pidLock.release()` 前に呼び出す）
 - `cloudflared` 未インストール時はエラーをログに出し、変換なしでフォールバック
 
-#### LocalhostRewriter
+#### LocalhostRewriter (`src/streaming/localhost-rewriter.ts`)
 
 テキスト内のlocalhost URLを検知して変換する。
 
 **検知対象の正規表現**:
 ```
-http://localhost:\d+[^\s)]*
+https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?[^\s)]*
 ```
+
+`http://localhost:3000`、`http://127.0.0.1:8080/path`、`http://localhost`（ポートなし）等にマッチ。
 
 **変換ルール**:
 ```
@@ -74,26 +78,27 @@ http://localhost:\d+[^\s)]*
 - localhost URLをバッククォートで囲みクリック不可にする
 - 直後にmrkdwnリンクを追加（表示テキストがURL以外なのでSlackのフィッシング警告が出ない）
 - 複数URLがあれば個別にトンネルを張って変換
-- トンネル未確立時は5秒タイムアウト後、変換なしでそのまま投稿
+- トンネル未確立時は2秒タイムアウト後、変換なしでそのまま投稿
+- **適用順序**: `convertMarkdownToMrkdwn` の前に適用する（Markdown→mrkdwn変換でURLリンクの形式が変わるため、先にrewriteしないと検知が壊れる）
 
 ## 既存コードへの統合
 
 ### StreamProcessor
 
-- `result`イベント処理時（最終更新）にテキストを `LocalhostRewriter.rewrite(text)` に通す
+- `handleResult` メソッド内で、`convertMarkdownToMrkdwn` を呼ぶ前に `LocalhostRewriter.rewrite(text)` を適用する
 - ストリーミング途中のテキストには触れない（既存動作そのまま）
 
 ### localhost URL検知タイミング
 
-- ストリーミング中にテキストを監視し、localhost URLが出現したら即座に `TunnelManager.startTunnel(port)` を呼ぶ
+- `handleText` メソッド内、`textAction` 生成直前にテキストをチェック
+- localhost URLが出現したら即座に `TunnelManager.startTunnel(port)` を呼ぶ（awaitしない、fire-and-forget）
 - トンネル確立を先行開始することで、最終更新時には待ち時間ゼロを目指す
-- `textAction` 生成時にテキスト内容をチェックする形で実装
 
 ### トンネルのライフサイクル
 
 - Bridge起動時: `TunnelManager` インスタンスを生成
 - セッション終了時: トンネルは停止しない（別セッションで同じポートが使われる可能性）
-- Bridge終了時: `TunnelManager.stopAll()` で全トンネルを一括停止
+- Bridge終了時: `shutdown` 関数内で `TunnelManager.stopAll()` を呼び全トンネルを一括停止
 
 ## セットアップ
 
