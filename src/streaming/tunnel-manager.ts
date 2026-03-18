@@ -2,7 +2,7 @@ import { spawn, ChildProcess } from 'child_process';
 import { logger } from '../utils/logger.js';
 
 const MAX_TUNNELS = 5;
-const TUNNEL_TIMEOUT_MS = 8000;
+const TUNNEL_TIMEOUT_MS = 15000;
 const TUNNEL_URL_REGEX = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
 
 interface TunnelEntry {

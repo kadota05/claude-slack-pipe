@@ -127,9 +127,10 @@ export class StreamProcessor {
     this.textBuffer += text;
 
     if (this.tunnelManager) {
-      const localUrls = extractLocalUrls(text);
+      // Scan full buffer, not just new chunk — URLs may be split across chunks
+      const localUrls = extractLocalUrls(this.textBuffer);
       for (const { port } of localUrls) {
-        // Fire-and-forget: start tunnel in parallel
+        // Fire-and-forget: start tunnel in parallel (deduplication handled by TunnelManager)
         this.tunnelManager.startTunnel(port);
       }
     }
@@ -223,11 +224,13 @@ export class StreamProcessor {
     // Rewrite localhost URLs to tunnel URLs before final text conversion
     if (this.tunnelManager && this.textBuffer) {
       const localUrls = extractLocalUrls(this.textBuffer);
+      logger.info(`[tunnel-debug] localUrls found: ${JSON.stringify(localUrls)}`);
       if (localUrls.length > 0) {
         const urlMap = new Map<string, string>();
         await Promise.all(
           localUrls.map(async ({ url, port }) => {
             const tunnelUrl = await this.tunnelManager!.startTunnel(port);
+            logger.info(`[tunnel-debug] port=${port} tunnelUrl="${tunnelUrl}"`);
             if (tunnelUrl) {
               const parsed = new URL(url);
               const path = parsed.pathname + parsed.search + parsed.hash;
@@ -235,6 +238,7 @@ export class StreamProcessor {
             }
           })
         );
+        logger.info(`[tunnel-debug] urlMap size=${urlMap.size}, entries=${JSON.stringify([...urlMap.entries()])}`);
         this.textBuffer = rewriteLocalUrls(this.textBuffer, urlMap);
       }
     }
