@@ -136,14 +136,14 @@ describe('SessionJsonlReader.readBundle', () => {
 });
 
 describe('SessionJsonlReader bundle boundary', () => {
-  it('should NOT create bundle boundary on short assistant text', async () => {
+  it('should create bundle boundary on any assistant text after activity', async () => {
     const tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonl-test-'));
     const projectPath = '/test/project';
     const sessionId = 'sess-1';
 
     // Event flow:
-    // thinking → tool_use(ToolSearch) → tool_result → short text → tool_use(mcp_tool) → tool_result → long text
-    // Expected: ONE bundle containing thinking + ToolSearch + mcp_tool
+    // thinking → tool_use(ToolSearch) → tool_result → short text (boundary!) → tool_use(mcp_tool) → tool_result → long text
+    // Expected: Bundle 0 = thinking + ToolSearch, Bundle 1 = mcp_tool
     const dirName = projectPath.replace(/\//g, '-');
     const fullDir = path.join(tmpDir2, dirName);
     fs.mkdirSync(fullDir, { recursive: true });
@@ -152,21 +152,25 @@ describe('SessionJsonlReader bundle boundary', () => {
       { message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'searching...' }] } },
       { message: { role: 'assistant', content: [{ type: 'tool_use', id: 'ts-1', name: 'ToolSearch', input: { query: 'mcp' } }] } },
       { message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'ts-1', content: 'found' }] } },
-      { message: { role: 'assistant', content: [{ type: 'text', text: 'ツールを確認。' }] } },  // short < 100
+      { message: { role: 'assistant', content: [{ type: 'text', text: 'ツールを確認。' }] } },  // any text after activity = boundary
       { message: { role: 'assistant', content: [{ type: 'tool_use', id: 'mcp-1', name: 'mcp__gcal', input: {} }] } },
       { message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'mcp-1', content: 'events: []' }] } },
-      { message: { role: 'assistant', content: [{ type: 'text', text: 'これは非常に長いテキストレスポンスです。ユーザーの質問に対して詳細な回答を提供しています。バンドルはこのテキストで折りたたまれるべきです。十分な長さがあるため、バッファのチェックを超えます。Lorem ipsum dolor sit amet.' }] } },
+      { message: { role: 'assistant', content: [{ type: 'text', text: 'Done.' }] } },
     ];
     fs.writeFileSync(filePath, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
 
     const reader2 = new SessionJsonlReader(tmpDir2);
-    const entries = await reader2.readBundle(projectPath, sessionId, 0);
+    const bundle0 = await reader2.readBundle(projectPath, sessionId, 0);
+    const bundle1 = await reader2.readBundle(projectPath, sessionId, 1);
 
-    // Bundle 0 should contain: thinking + ToolSearch + mcp_tool
-    expect(entries.length).toBe(3);
-    expect(entries[0].type).toBe('thinking');
-    expect(entries[1].type).toBe('tool');
-    expect(entries[2].type).toBe('tool');
+    // Bundle 0: thinking + ToolSearch
+    expect(bundle0.length).toBe(2);
+    expect(bundle0[0].type).toBe('thinking');
+    expect(bundle0[1].type).toBe('tool');
+
+    // Bundle 1: mcp_tool
+    expect(bundle1.length).toBe(1);
+    expect(bundle1[0].type).toBe('tool');
 
     fs.rmSync(tmpDir2, { recursive: true, force: true });
   });
