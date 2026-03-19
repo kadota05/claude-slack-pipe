@@ -24,10 +24,6 @@ interface CollapsedConfig {
   subagentDurationMs: number;
 }
 
-function formatTokens(n: number): string {
-  return n.toLocaleString('en-US');
-}
-
 function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
