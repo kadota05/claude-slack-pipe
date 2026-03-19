@@ -38,7 +38,7 @@ export class StreamProcessor {
 
   async processEvent(event: any): Promise<ProcessedActions> {
     // Detect first content for reaction timing (top-level only)
-    if (!this.firstContentReceived) {
+    if (!this.firstContentReceived && !event.parent_tool_use_id) {
       if (event.type === 'assistant' && event.message?.content) {
         const hasContent = event.message.content.some(
           (block: any) => block.type === 'thinking' || block.type === 'text' || block.type === 'tool_use'

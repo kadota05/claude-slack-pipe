@@ -464,6 +464,103 @@ describe('StreamProcessor - no 応答中 footer', () => {
   });
 });
 
+describe('StreamProcessor - onFirstContent callback', () => {
+  it('fires onFirstContent on first assistant content', async () => {
+    const onFirstContent = vi.fn();
+    const sp = new StreamProcessor({
+      channel: 'C1', threadTs: '1.0', sessionId: 's1', onFirstContent,
+    });
+
+    await sp.processEvent({
+      type: 'assistant',
+      message: { content: [{ type: 'thinking', thinking: 'hmm' }] },
+    });
+    expect(onFirstContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fire on subsequent assistant events', async () => {
+    const onFirstContent = vi.fn();
+    const sp = new StreamProcessor({
+      channel: 'C1', threadTs: '1.0', sessionId: 's1', onFirstContent,
+    });
+
+    await sp.processEvent({
+      type: 'assistant',
+      message: { content: [{ type: 'thinking', thinking: 'hmm' }] },
+    });
+    await sp.processEvent({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'hello' }] },
+    });
+    expect(onFirstContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fire on result events', async () => {
+    const onFirstContent = vi.fn();
+    const sp = new StreamProcessor({
+      channel: 'C1', threadTs: '1.0', sessionId: 's1', onFirstContent,
+    });
+
+    await sp.processEvent({ type: 'result', duration_ms: 1000 });
+    expect(onFirstContent).not.toHaveBeenCalled();
+  });
+
+  it('fires again after reset()', async () => {
+    const onFirstContent = vi.fn();
+    const sp = new StreamProcessor({
+      channel: 'C1', threadTs: '1.0', sessionId: 's1', onFirstContent,
+    });
+
+    await sp.processEvent({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'hello' }] },
+    });
+    expect(onFirstContent).toHaveBeenCalledTimes(1);
+
+    sp.reset();
+
+    await sp.processEvent({
+      type: 'assistant',
+      message: { content: [{ type: 'thinking', thinking: 'new turn' }] },
+    });
+    expect(onFirstContent).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not fire on subagent child events (parent_tool_use_id)', async () => {
+    const onFirstContent = vi.fn();
+    const sp = new StreamProcessor({
+      channel: 'C1', threadTs: '1.0', sessionId: 's1', onFirstContent,
+    });
+
+    // Subagent child event should NOT trigger onFirstContent
+    await sp.processEvent({
+      type: 'assistant',
+      parent_tool_use_id: 'agent-1',
+      message: { content: [{ type: 'text', text: 'child text' }] },
+    });
+    expect(onFirstContent).not.toHaveBeenCalled();
+
+    // Top-level event should trigger it
+    await sp.processEvent({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'top level' }] },
+    });
+    expect(onFirstContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('works without onFirstContent callback (backward compat)', async () => {
+    const sp = new StreamProcessor({
+      channel: 'C1', threadTs: '1.0', sessionId: 's1',
+    });
+
+    // Should not throw
+    await sp.processEvent({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'hello' }] },
+    });
+  });
+});
+
 describe('StreamProcessor - text-tool-text pattern (integration)', () => {
   it('handles text → tool → text pattern with separate messages', async () => {
     const sp = new StreamProcessor({ channel: 'C1', threadTs: '1.0', sessionId: 's1' });
