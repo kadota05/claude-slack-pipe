@@ -1,6 +1,6 @@
 // src/slack/command-parser.ts
 
-const BOT_COMMANDS = new Set(['end', 'status', 'restart']);
+const BOT_COMMANDS = new Set(['end', 'status', 'restart', 'restart-bridge']);
 const BOT_COMMAND_ALIASES: Record<string, string> = { 'cli-status': 'status' };
 
 export type ParsedCommand =

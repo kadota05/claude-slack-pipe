@@ -17,8 +17,9 @@ import { parsePermissionAction } from './slack/permission-prompt.js';
 import { sanitizeUserInput } from './utils/sanitizer.js';
 import { buildResponseFooter, buildThreadHeaderText } from './slack/block-builder.js';
 import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import type { PersistentSession } from './bridge/persistent-session.js';
-import { acquirePidLock } from './utils/pid-lock.js';
 import { StreamProcessor } from './streaming/stream-processor.js';
 import { SlackActionExecutor } from './streaming/slack-action-executor.js';
 import { buildToolModal, buildThinkingModal, buildSubagentModal, buildBundleDetailModal } from './slack/modal-builder.js';
@@ -53,13 +54,50 @@ function waitForIdle(session: PersistentSession, timeoutMs = 300000): Promise<vo
 }
 
 async function main(): Promise<void> {
+  // Circuit breaker — prevent crash loops under launchd
+  if (process.env.MANAGED_BY_LAUNCHD) {
+    const crashFile = path.join(
+      os.homedir(),
+      '.claude-slack-pipe',
+      'crash-history.json',
+    );
+    const now = Date.now();
+    let history: number[] = [];
+    try {
+      history = JSON.parse(fs.readFileSync(crashFile, 'utf-8'));
+    } catch { /* first run or corrupt */ }
+    // Keep only entries within 60s window, cap at 4
+    history = history.filter((t) => now - t < 60_000).slice(-4);
+    if (history.length >= 4) {
+      logger.error('Crash loop detected (5 crashes in 60s). Sleeping 5 minutes before retry. Fix the issue and restart with: launchctl kickstart -k gui/$(id -u)/com.user.claude-slack-pipe');
+      await new Promise((resolve) => setTimeout(resolve, 300_000));
+      // Clear history after sleep so we get a fresh start
+      fs.writeFileSync(crashFile, '[]');
+    }
+    history.push(now);
+    fs.mkdirSync(path.dirname(crashFile), { recursive: true });
+    fs.writeFileSync(crashFile, JSON.stringify(history));
+  }
+
   const config = loadConfig();
+
+  // Simple log rotation for launchd stdout/stderr files
+  if (process.env.MANAGED_BY_LAUNCHD) {
+    const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10MB
+    for (const logFile of ['bridge.stdout.log', 'bridge.stderr.log']) {
+      const logPath = path.join(config.dataDir, logFile);
+      try {
+        const stat = fs.statSync(logPath);
+        if (stat.size > MAX_LOG_SIZE) {
+          fs.renameSync(logPath, logPath + '.old');
+          logger.info(`Rotated ${logFile} (${(stat.size / 1024 / 1024).toFixed(1)}MB)`);
+        }
+      } catch { /* file doesn't exist yet */ }
+    }
+  }
 
   // Ensure data directory exists
   fs.mkdirSync(config.dataDir, { recursive: true });
-
-  // Singleton lock — prevent duplicate instances
-  const pidLock = acquirePidLock(config.dataDir);
 
   const app = createApp(config);
 
@@ -162,6 +200,34 @@ async function main(): Promise<void> {
 
     // Bot commands
     if (parsed.type === 'bot_command') {
+      // restart-bridge is a global command — no session context needed
+      if (parsed.command === 'restart-bridge') {
+        if (!auth.isAdmin(userId)) {
+          await app.client.chat.postEphemeral({
+            channel: channelId,
+            user: userId,
+            text: '⛔ This command requires admin privileges.',
+          });
+          return;
+        }
+        const restartMsg = await app.client.chat.postMessage({
+          channel: channelId,
+          thread_ts: threadTs,
+          text: '🔄 Bridgeを再起動します...',
+        });
+        // Save restart message info so new process can update it
+        const restartPendingFile = path.join(os.homedir(), '.claude-slack-pipe', 'restart-pending.json');
+        try {
+          fs.writeFileSync(restartPendingFile, JSON.stringify({
+            channel: channelId,
+            ts: restartMsg.ts,
+            thread_ts: threadTs,
+          }));
+        } catch { /* best-effort */ }
+        await shutdown('restart-bridge');
+        return;
+      }
+
       const indexEntry = sessionIndexStore.findByThreadTs(threadTs);
       if (parsed.command === 'status') {
         const session = indexEntry ? coordinator.getSession(indexEntry.cliSessionId) : undefined;
@@ -811,6 +877,22 @@ async function main(): Promise<void> {
   await startApp(app);
   logger.info('Claude Code Slack Bridge is running (Phase 2)');
 
+  // Update restart message if pending
+  const restartPendingFile = path.join(os.homedir(), '.claude-slack-pipe', 'restart-pending.json');
+  try {
+    if (fs.existsSync(restartPendingFile)) {
+      const pending = JSON.parse(fs.readFileSync(restartPendingFile, 'utf-8'));
+      fs.unlinkSync(restartPendingFile);
+      await app.client.chat.update({
+        channel: pending.channel,
+        ts: pending.ts,
+        text: '✅ Bridgeの再起動が完了しました',
+      });
+    }
+  } catch (err) {
+    logger.warn('Failed to update restart message', { error: (err as Error).message });
+  }
+
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info(`Received ${signal}, shutting down...`);
@@ -819,7 +901,11 @@ async function main(): Promise<void> {
       coordinator.endSession(entry.cliSessionId);
     }
     tunnelManager.stopAll();
-    pidLock.release();
+    // Clear crash history on intentional restart so it doesn't trigger circuit breaker
+    if (signal === 'restart-bridge' && process.env.MANAGED_BY_LAUNCHD) {
+      const crashFile = path.join(os.homedir(), '.claude-slack-pipe', 'crash-history.json');
+      try { fs.writeFileSync(crashFile, '[]'); } catch { /* best-effort */ }
+    }
     await app.stop();
     process.exit(0);
   };

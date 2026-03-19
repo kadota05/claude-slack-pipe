@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.user.claude-slack-pipe</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>caffeinate</string>
+    <string>-i</string>
+    <string>{{NODE_PATH}}</string>
+    <string>{{PROJECT_DIR}}/node_modules/.bin/tsx</string>
+    <string>src/index.ts</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>{{PROJECT_DIR}}</string>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>{{DATA_DIR}}/bridge.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>{{DATA_DIR}}/bridge.stderr.log</string>
+
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{{NODE_BIN_DIR}}:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    <key>MANAGED_BY_LAUNCHD</key>
+    <string>1</string>
+  </dict>
+</dict>
+</plist>
