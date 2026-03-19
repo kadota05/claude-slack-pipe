@@ -17,6 +17,8 @@ import { parsePermissionAction } from './slack/permission-prompt.js';
 import { sanitizeUserInput } from './utils/sanitizer.js';
 import { buildResponseFooter, buildThreadHeaderText } from './slack/block-builder.js';
 import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import type { PersistentSession } from './bridge/persistent-session.js';
 import { acquirePidLock } from './utils/pid-lock.js';
 import { StreamProcessor } from './streaming/stream-processor.js';
@@ -58,8 +60,11 @@ async function main(): Promise<void> {
   // Ensure data directory exists
   fs.mkdirSync(config.dataDir, { recursive: true });
 
-  // Singleton lock — prevent duplicate instances
-  const pidLock = acquirePidLock(config.dataDir);
+  // Singleton lock — skip when managed by launchd
+  let pidLock: { release: () => void } | null = null;
+  if (!process.env.MANAGED_BY_LAUNCHD) {
+    pidLock = acquirePidLock(config.dataDir);
+  }
 
   const app = createApp(config);
 
@@ -819,7 +824,7 @@ async function main(): Promise<void> {
       coordinator.endSession(entry.cliSessionId);
     }
     tunnelManager.stopAll();
-    pidLock.release();
+    pidLock?.release();
     await app.stop();
     process.exit(0);
   };
