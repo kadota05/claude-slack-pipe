@@ -167,6 +167,25 @@ async function main(): Promise<void> {
 
     // Bot commands
     if (parsed.type === 'bot_command') {
+      // restart-bridge is a global command — no session context needed
+      if (parsed.command === 'restart-bridge') {
+        if (!auth.isAdmin(userId)) {
+          await app.client.chat.postEphemeral({
+            channel: channelId,
+            user: userId,
+            text: '⛔ This command requires admin privileges.',
+          });
+          return;
+        }
+        await app.client.chat.postMessage({
+          channel: channelId,
+          thread_ts: threadTs,
+          text: '🔄 Bridgeを再起動します...',
+        });
+        await shutdown('restart-bridge');
+        return;
+      }
+
       const indexEntry = sessionIndexStore.findByThreadTs(threadTs);
       if (parsed.command === 'status') {
         const session = indexEntry ? coordinator.getSession(indexEntry.cliSessionId) : undefined;
