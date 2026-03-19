@@ -104,7 +104,7 @@ notifyText.update.collapsed(config)        → "💭×1 🔧×3 (2.5s)"
 | 箇所 | 現在 | 変更後 |
 |------|------|--------|
 | テキスト応答の「応答中...」contextブロック | 表示 | 削除 |
-| text生成（4箇所の `this.textBuffer.slice(0, 100)`) | インライン | `notifyText.text(buffer)` |
+| text生成（5箇所の `this.textBuffer.slice(0, 100)`) | インライン | `notifyText.text(buffer)` |
 
 #### src/streaming/tool-formatter.ts
 
