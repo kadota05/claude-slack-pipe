@@ -55,6 +55,29 @@ function waitForIdle(session: PersistentSession, timeoutMs = 300000): Promise<vo
 }
 
 async function main(): Promise<void> {
+  // Circuit breaker — prevent crash loops under launchd
+  if (process.env.MANAGED_BY_LAUNCHD) {
+    const crashFile = path.join(
+      os.homedir(),
+      '.claude-slack-pipe',
+      'crash-history.json',
+    );
+    const now = Date.now();
+    let history: number[] = [];
+    try {
+      history = JSON.parse(fs.readFileSync(crashFile, 'utf-8'));
+    } catch { /* first run or corrupt */ }
+    // Keep only entries within 60s window, cap at 4
+    history = history.filter((t) => now - t < 60_000).slice(-4);
+    if (history.length >= 4) {
+      logger.error('Crash loop detected (5 crashes in 60s), exiting. Fix the issue and restart with: launchctl kickstart gui/$(id -u)/com.user.claude-slack-pipe');
+      process.exit(0); // exit(0) so launchd KeepAlive doesn't respawn
+    }
+    history.push(now);
+    fs.mkdirSync(path.dirname(crashFile), { recursive: true });
+    fs.writeFileSync(crashFile, JSON.stringify(history));
+  }
+
   const config = loadConfig();
 
   // Ensure data directory exists
