@@ -4,6 +4,7 @@ import { getToolOneLiner } from './tool-formatter.js';
 import { convertMarkdownToMrkdwn } from './markdown-converter.js';
 import { GroupTracker } from './group-tracker.js';
 import { TunnelManager } from './tunnel-manager.js';
+import { notifyText } from './notification-text.js';
 import { extractLocalUrls, rewriteLocalUrls } from './localhost-rewriter.js';
 import type {
   SlackAction,
@@ -156,7 +157,7 @@ export class StreamProcessor {
     result.bundleActions.push(...collapseActions);
 
     const converted = convertMarkdownToMrkdwn(this.textBuffer);
-    const blocks = this.buildTextBlocks(converted, false);
+    const blocks = this.buildTextBlocks(converted);
 
     if (!this.textMessageTs) {
       result.textAction = {
@@ -165,7 +166,7 @@ export class StreamProcessor {
         channel: this.config.channel,
         threadTs: this.config.threadTs,
         blocks,
-        text: this.textBuffer.slice(0, 100),
+        text: notifyText.text(this.textBuffer),
         metadata: { messageType: 'text' },
       };
     } else {
@@ -176,7 +177,7 @@ export class StreamProcessor {
         threadTs: this.config.threadTs,
         messageTs: this.textMessageTs,
         blocks,
-        text: this.textBuffer.slice(0, 100),
+        text: notifyText.text(this.textBuffer),
         metadata: { messageType: 'text' },
       };
     }
@@ -222,14 +223,14 @@ export class StreamProcessor {
         const collapseActions = this.groupTracker.handleTextStart(this.config.sessionId);
         result.bundleActions.push(...collapseActions);
         const converted = convertMarkdownToMrkdwn(this.textBuffer);
-        const blocks = this.buildTextBlocks(converted, false);
+        const blocks = this.buildTextBlocks(converted);
         result.textAction = {
           type: 'postMessage',
           priority: 1,
           channel: this.config.channel,
           threadTs: this.config.threadTs,
           blocks,
-          text: this.textBuffer.slice(0, 100),
+          text: notifyText.text(this.textBuffer),
           metadata: { messageType: 'text' },
         };
       }
@@ -271,7 +272,7 @@ export class StreamProcessor {
       }
 
       logger.info(`[tunnel-debug] final converted text: ${JSON.stringify(converted.substring(0, 500))}`);
-      const blocks = this.buildTextBlocks(converted, true);
+      const blocks = this.buildTextBlocks(converted);
 
       if (this.textMessageTs) {
         // Already posted — update with final content
@@ -282,7 +283,7 @@ export class StreamProcessor {
           threadTs: this.config.threadTs,
           messageTs: this.textMessageTs,
           blocks,
-          text: this.textBuffer.slice(0, 100),
+          text: notifyText.text(this.textBuffer),
           metadata: { messageType: 'text' },
         };
       } else {
@@ -293,7 +294,7 @@ export class StreamProcessor {
           channel: this.config.channel,
           threadTs: this.config.threadTs,
           blocks,
-          text: this.textBuffer.slice(0, 100),
+          text: notifyText.text(this.textBuffer),
           metadata: { messageType: 'text' },
         };
       }
@@ -303,19 +304,13 @@ export class StreamProcessor {
     result.mainApiCallCount = this.mainToolUseCount + 1;
   }
 
-  private buildTextBlocks(mrkdwn: string, isComplete: boolean): Block[] {
+  private buildTextBlocks(mrkdwn: string): Block[] {
     const blocks: Block[] = [];
     const parts = mrkdwn.match(/.{1,2900}/gs) || [mrkdwn];
     for (const part of parts) {
       blocks.push({
         type: 'section',
         text: { type: 'mrkdwn', text: part, verbatim: true },
-      });
-    }
-    if (!isComplete) {
-      blocks.push({
-        type: 'context',
-        elements: [{ type: 'mrkdwn', text: ':hourglass_flowing_sand: 応答中...' }],
       });
     }
     return blocks;

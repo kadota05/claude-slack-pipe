@@ -448,6 +448,22 @@ describe('StreamProcessor - parallel subagents (integration)', () => {
   });
 });
 
+describe('StreamProcessor - no 応答中 footer', () => {
+  it('does not include 応答中 footer in streaming text blocks', async () => {
+    const processor = new StreamProcessor({ channel: 'C1', threadTs: 'T1', sessionId: 'S1' });
+    const result = await processor.processEvent({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'Hello world' }] },
+    });
+    if (result.textAction) {
+      const hasFooter = result.textAction.blocks.some(
+        (b: any) => b.type === 'context' && JSON.stringify(b).includes('応答中')
+      );
+      expect(hasFooter).toBe(false);
+    }
+  });
+});
+
 describe('StreamProcessor - text-tool-text pattern (integration)', () => {
   it('handles text → tool → text pattern with separate messages', async () => {
     const sp = new StreamProcessor({ channel: 'C1', threadTs: '1.0', sessionId: 's1' });
