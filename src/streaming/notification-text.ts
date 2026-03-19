@@ -34,8 +34,8 @@ function formatDuration(ms: number): string {
 
 export const notifyText = {
   /** postMessage text for response footer (triggers notification) */
-  footer(model: string, totalTokens: number, durationMs: number): string {
-    return `${model} | ${formatTokens(totalTokens)} tokens | ${formatDuration(durationMs)}`;
+  footer(model: string, durationMs: number): string {
+    return `${model} | ${formatDuration(durationMs)}`;
   },
 
   /** postMessage/update text for text responses */

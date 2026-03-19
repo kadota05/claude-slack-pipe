@@ -539,7 +539,7 @@ async function main(): Promise<void> {
       serialQueue.enqueue(async () => {
         try {
           // 1. Process event — returns actions (async for tunnel URL rewriting)
-          const { bundleActions, textAction, resultEvent, mainApiCallCount } = await streamProcessor.processEvent(event);
+          const { bundleActions, textAction, resultEvent, lastMainUsage } = await streamProcessor.processEvent(event);
 
           // 2. Execute bundle actions sequentially
           for (const ba of bundleActions) {
@@ -563,24 +563,23 @@ async function main(): Promise<void> {
             logger.info(`[${session.sessionId}] result event received`);
 
             const usage = resultEvent.usage || {};
-            const apiCalls = mainApiCallCount || 1;
-            const inputTotal = (usage.input_tokens || 0)
-              + (usage.cache_read_input_tokens || 0)
-              + (usage.cache_creation_input_tokens || 0);
-            const contextUsed = Math.round(inputTotal / apiCalls);
+            const isApproximate = !lastMainUsage;
+            const effectiveUsage = lastMainUsage || usage;
+            const contextUsed = (effectiveUsage.input_tokens || 0)
+              + (effectiveUsage.cache_read_input_tokens || 0)
+              + (effectiveUsage.cache_creation_input_tokens || 0);
 
             const sessionModel = indexStore.findByThreadTs(threadTs)?.model || '';
             const contextWindow = sessionModel.includes('haiku') ? 200_000 : 1_000_000;
 
-            logger.info(`[${session.sessionId}] ctx: ${inputTotal} / ${apiCalls} calls = ${contextUsed} (${(contextUsed / contextWindow * 100).toFixed(1)}%)`);
+            logger.info(`[${session.sessionId}] ctx: ${contextUsed} / ${contextWindow} (${(contextUsed / contextWindow * 100).toFixed(1)}%)${isApproximate ? ' [approx]' : ''}`);
 
             const footerBlocks = buildResponseFooter({
-              inputTokens: usage.input_tokens || 0,
-              outputTokens: usage.output_tokens || 0,
               contextUsed,
               contextWindow,
               model: sessionModel || 'unknown',
               durationMs: resultEvent.duration_ms || 0,
+              isApproximate,
             });
 
             await client.chat.postMessage({
@@ -589,7 +588,6 @@ async function main(): Promise<void> {
               blocks: footerBlocks,
               text: notifyText.footer(
                 sessionModel || 'unknown',
-                (usage.input_tokens || 0) + (usage.output_tokens || 0),
                 resultEvent.duration_ms || 0,
               ),
             });
