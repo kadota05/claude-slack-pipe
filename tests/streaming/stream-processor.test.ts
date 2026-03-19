@@ -159,15 +159,16 @@ describe('StreamProcessor child event filtering', () => {
   });
 });
 
-describe('StreamProcessor short text bundle deferral', () => {
-  it('should NOT collapse bundle when short text arrives between tool calls', async () => {
+describe('StreamProcessor text posting (no 100-char buffer)', () => {
+  it('collapses bundle when any text arrives (regardless of length)', async () => {
     const sp = makeProcessor();
 
     // 1. thinking + tool_use → bundle starts
-    await sp.processEvent({
+    const r0 = await sp.processEvent({
       type: 'assistant',
       message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'Let me search...' }] },
     });
+    sp.registerBundleMessageTs(r0.bundleActions[0].bundleId, 'MSG_TS_1');
     await sp.processEvent({
       type: 'assistant',
       message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tool-1', name: 'ToolSearch', input: { query: 'mcp' } }] },
@@ -177,21 +178,15 @@ describe('StreamProcessor short text bundle deferral', () => {
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'found tools' }] },
     });
 
-    // 2. Short text (< 100 chars) — should NOT collapse bundle
+    // 2. Short text — NOW collapses bundle immediately (no 100-char buffer)
     const r = await sp.processEvent({
       type: 'assistant',
       message: { role: 'assistant', content: [{ type: 'text', text: 'ツールを確認しました。' }] },
     });
     const collapseActions = r.bundleActions.filter(a => a.type === 'collapse');
-    expect(collapseActions).toHaveLength(0);
-
-    // 3. Next tool_use — should be in the SAME bundle (not a new one)
-    const r2 = await sp.processEvent({
-      type: 'assistant',
-      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tool-2', name: 'mcp__gcal', input: {} }] },
-    });
-    const postActions = r2.bundleActions.filter(a => a.type === 'postMessage');
-    expect(postActions).toHaveLength(0); // No new bundle posted
+    expect(collapseActions).toHaveLength(1);
+    expect(r.textAction).toBeDefined();
+    expect(r.textAction!.type).toBe('postMessage');
   });
 
   it('should collapse bundle when long text arrives', async () => {
@@ -208,7 +203,7 @@ describe('StreamProcessor short text bundle deferral', () => {
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'file contents' }] },
     });
 
-    // 2. Long text (>= 100 chars) — should collapse bundle
+    // 2. Long text — should collapse bundle
     const longText = 'これは非常に長いテキストレスポンスです。ユーザーの質問に対して詳細な回答を提供しています。バンドルはこのテキストで折りたたまれるべきです。十分な長さがあるため、バッファのチェックを超えます。追記：この行で確実に100文字を超えます。';
     const r = await sp.processEvent({
       type: 'assistant',
@@ -218,7 +213,7 @@ describe('StreamProcessor short text bundle deferral', () => {
     expect(collapseActions).toHaveLength(1);
   });
 
-  it('should collapse bundle on result even with buffered short text', async () => {
+  it('short text collapses bundle immediately, not deferred to result', async () => {
     const sp = makeProcessor();
 
     // 1. tool_use → bundle starts
@@ -232,21 +227,20 @@ describe('StreamProcessor short text bundle deferral', () => {
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'ok' }] },
     });
 
-    // 2. Short text — NOT collapsed
-    await sp.processEvent({
+    // 2. Short text — collapses immediately now
+    const r1 = await sp.processEvent({
       type: 'assistant',
       message: { role: 'assistant', content: [{ type: 'text', text: '完了。' }] },
     });
+    const collapseActions1 = r1.bundleActions.filter(a => a.type === 'collapse');
+    expect(collapseActions1).toHaveLength(1);
 
-    // 3. Result event — flushes active bundle
+    // 3. Result event — no bundle left to collapse
     const r = await sp.processEvent({ type: 'result', duration_ms: 1000 });
     expect(r.resultEvent).toBeDefined();
-    // Bundle should have been flushed (collapsed)
-    const collapseActions = r.bundleActions.filter(a => a.type === 'collapse');
-    expect(collapseActions).toHaveLength(1);
   });
 
-  it('should collapse bundle when accumulated short texts exceed threshold', async () => {
+  it('first short text collapses immediately (no accumulation needed)', async () => {
     const sp = makeProcessor();
 
     // 1. tool_use → bundle starts
@@ -260,20 +254,13 @@ describe('StreamProcessor short text bundle deferral', () => {
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'ok' }] },
     });
 
-    // 2. First short text (30 chars) — NOT collapsed
+    // 2. First short text — collapses immediately
     const r1 = await sp.processEvent({
       type: 'assistant',
       message: { role: 'assistant', content: [{ type: 'text', text: 'ファイルを確認しました。次に進みます。' }] },
     });
-    expect(r1.bundleActions.filter(a => a.type === 'collapse')).toHaveLength(0);
-
-    // 3. Second short text — accumulated total >= 100 chars → COLLAPSE
-    const r2 = await sp.processEvent({
-      type: 'assistant',
-      message: { role: 'assistant', content: [{ type: 'text', text: 'このファイルには重要な設定が含まれています。変更内容を詳しく確認して、適切な修正を提案します。では具体的に見ていきましょう。合計100文字を超えるための追加テキストです。' }] },
-    });
-    const collapseActions = r2.bundleActions.filter(a => a.type === 'collapse');
-    expect(collapseActions).toHaveLength(1);
+    expect(r1.bundleActions.filter(a => a.type === 'collapse')).toHaveLength(1);
+    expect(r1.textAction).toBeDefined();
   });
 });
 
@@ -339,5 +326,76 @@ describe('StreamProcessor with TunnelManager', () => {
       message: { content: [{ type: 'text', text: 'Server at http://localhost:3000' }] },
     });
     expect(result).toBeDefined();
+  });
+});
+
+describe('StreamProcessor - round-based text splitting', () => {
+  const config = { channel: 'C123', threadTs: '1234.5678', sessionId: 'test-session' };
+
+  it('posts text immediately regardless of length (no 100-char buffering)', async () => {
+    const sp = new StreamProcessor(config);
+
+    // thinking → tool → short text
+    await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'hmm' }] } });
+    sp.registerBundleMessageTs('bundle-1', '1111.0000');
+    await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/a.txt' } }] } });
+    await sp.processEvent({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } });
+
+    // Short text (< 100 chars) — should still produce textAction
+    const result = await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'text', text: '確認しました。' }] } });
+    expect(result.textAction).toBeDefined();
+    expect(result.textAction!.type).toBe('postMessage');
+  });
+
+  it('resets textMessageTs when new thinking starts', async () => {
+    const sp = new StreamProcessor(config);
+
+    // Round 1: text
+    const r1 = await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'text', text: 'Round 1 text' }] } });
+    expect(r1.textAction?.type).toBe('postMessage');
+    sp.registerTextMessageTs('2222.0000');
+
+    // Round 2: thinking starts → should reset textMessageTs
+    await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'thinking again' }] } });
+    sp.registerBundleMessageTs('bundle-1', '3333.0000');
+
+    // Round 2: text → should be NEW postMessage, not update
+    const result = await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'text', text: 'Round 2 text' }] } });
+    expect(result.textAction).toBeDefined();
+    expect(result.textAction!.type).toBe('postMessage');
+  });
+
+  it('resets textMessageTs when new tool_use starts', async () => {
+    const sp = new StreamProcessor(config);
+
+    // Round 1: text
+    await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'text', text: 'First response' }] } });
+    sp.registerTextMessageTs('2222.0000');
+
+    // New tool starts → should reset
+    await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/b.txt' } }] } });
+    sp.registerBundleMessageTs('bundle-1', '4444.0000');
+    await sp.processEvent({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } });
+
+    // Next text → should be postMessage (new message)
+    const result = await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'text', text: 'Second response' }] } });
+    expect(result.textAction?.type).toBe('postMessage');
+  });
+
+  it('buffers text while subagents are running', async () => {
+    const sp = new StreamProcessor(config);
+
+    // Start agent
+    await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'agentA', name: 'Agent', input: { description: 'Explore' } }] } });
+    sp.registerBundleMessageTs('bundle-1', 'b1.ts');
+
+    // Text while agent running — should be buffered
+    const textDuring = await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'text', text: 'Working...' }] } });
+    expect(textDuring.textAction).toBeUndefined();
+
+    // Complete agent — text should flush
+    const completion = await sp.processEvent({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'agentA', content: 'agentId: abc\ndone' }] } });
+    expect(completion.textAction).toBeDefined();
+    expect(completion.textAction!.type).toBe('postMessage');
   });
 });

@@ -270,7 +270,7 @@ export class GroupTracker {
     }
 
     // Mark running items as error in activeSubagents and move to completed
-    for (const [toolUseId, agent] of this.activeSubagents) {
+    for (const [, agent] of this.activeSubagents) {
       for (const step of agent.agentSteps) {
         if (step.status === 'running') step.status = 'error';
       }

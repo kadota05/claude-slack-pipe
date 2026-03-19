@@ -78,11 +78,19 @@ export class StreamProcessor {
     // No timers or listeners to clean up in v2
   }
 
+  private finalizeCurrentText(): void {
+    if (this.textMessageTs) {
+      this.textMessageTs = null;
+      this.textBuffer = '';
+    }
+  }
+
   private handleAssistant(content: any[], parentToolUseId: string | null, result: ProcessedActions): void {
     for (const block of content) {
       if (block.type === 'thinking') {
         // Skip child thinking — internal to subagent
         if (parentToolUseId) continue;
+        this.finalizeCurrentText();
         const actions = this.groupTracker.handleThinking(block.thinking);
         result.bundleActions.push(...actions);
       } else if (block.type === 'tool_use') {
@@ -107,6 +115,9 @@ export class StreamProcessor {
       result.bundleActions.push(...actions);
       return;
     }
+
+    // Main tool — finalize any previous text round
+    this.finalizeCurrentText();
 
     // Agent tool = new subagent
     if (toolName === 'Agent') {
@@ -135,11 +146,8 @@ export class StreamProcessor {
       }
     }
 
-    // Buffer short text — don't post or collapse yet.
-    // Short intermediate text (e.g. "まず確認してみます。") before tool_use
-    // would otherwise collapse the bundle too early and split ToolSearch →
-    // MCP tool sequences into separate bundles.
-    if (!this.textMessageTs && this.textBuffer.length < 100) {
+    // Buffer text while subagents are running — flush when they complete
+    if (this.groupTracker.hasActiveSubagents()) {
       return;
     }
 
@@ -208,6 +216,23 @@ export class StreamProcessor {
       }
       const subagentActions = this.groupTracker.handleSubagentComplete(toolUseId, resultText, 0);
       result.bundleActions.push(...subagentActions);
+
+      // Flush pending text when all subagents complete
+      if (!this.groupTracker.hasActiveSubagents() && this.textBuffer) {
+        const collapseActions = this.groupTracker.handleTextStart(this.config.sessionId);
+        result.bundleActions.push(...collapseActions);
+        const converted = convertMarkdownToMrkdwn(this.textBuffer);
+        const blocks = this.buildTextBlocks(converted, false);
+        result.textAction = {
+          type: 'postMessage',
+          priority: 1,
+          channel: this.config.channel,
+          threadTs: this.config.threadTs,
+          blocks,
+          text: this.textBuffer.slice(0, 100),
+          metadata: { messageType: 'text' },
+        };
+      }
       return;
     }
 
