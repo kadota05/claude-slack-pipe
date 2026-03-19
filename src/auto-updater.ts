@@ -86,9 +86,11 @@ export class AutoUpdater {
   private fetchAndCompare(): boolean {
     try {
       const opts = { cwd: this.projectRoot, timeout: 60_000 };
+      logger.info('[AutoUpdater] Running fetchAndCompare', { cwd: this.projectRoot });
       execSync('git fetch origin main', opts);
       const local = execSync('git rev-parse HEAD', opts).toString().trim();
       const remote = execSync('git rev-parse origin/main', opts).toString().trim();
+      logger.info('[AutoUpdater] Compare result', { local: local.slice(0, 7), remote: remote.slice(0, 7), hasUpdate: local !== remote });
       return local !== remote;
     } catch (err: any) {
       logger.warn('[AutoUpdater] git fetch failed', { error: err?.message });
