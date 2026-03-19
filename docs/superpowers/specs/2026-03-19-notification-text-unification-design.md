@@ -81,23 +81,41 @@ notifyText.update.collapsed(config)        → "💭×1 🔧×3 (2.5s)"
 | 569 | `text: 'Complete'` | `notifyText.footer(model, tokens, duration)` |
 
 #### src/streaming/group-tracker.ts
-| 箇所 | 現在 | 変更後 |
-|------|------|--------|
-| バンドル更新時のtext | 動的 | `notifyText.update.tools(tools)` 等 |
-| collapseActiveBundle | `text: 'bundle collapsed'` | `notifyText.update.collapsed(config)` |
+
+全text設定箇所の一覧:
+
+| 関数 | 行 | 現在のtext | 変更後 | 備考 |
+|------|-----|-----------|--------|------|
+| `handleThinking` | L54 | `'思考中...'` | `notifyText.update.thinking()` | 思考開始時のpostMessage |
+| `handleThinking` | L60 | `'思考中...'` | `notifyText.update.thinking()` | 思考追記時のupdate |
+| `handleThinking` | L70 | `'思考中...'` | `notifyText.update.thinking()` | 新思考開始時のupdate |
+| `handleToolUse` | L99 | `` `${toolName}: ${oneLiner}` `` | そのまま（既に内容ベース） | ツール開始時のpostMessage |
+| `handleToolUse` | L104 | `` `${toolName}: ${oneLiner}` `` | そのまま（既に内容ベース） | ツール追加時のupdate |
+| `handleToolUse` | L114 | `` `${this.activeGroup.tools.length}ツール実行中` `` | `notifyText.update.tools(tools)` | ツール結果時のupdate（例: `🔧 Read, Bash, Grep`） |
+| `handleToolUse` | L139 | `` `${this.activeGroup.tools.length}ツール実行中` `` | `notifyText.update.tools(tools)` | ツール進捗時のupdate |
+| `handleSubagentStart` | L167 | `` `SubAgent: ${description}` `` | そのまま（既に内容ベース） | SubAgent開始時のpostMessage |
+| `handleSubagentStart` | L172 | SubAgent関連text | そのまま（既に内容ベース） | SubAgent追加時のupdate |
+| `handleSubagentProgress` | L192 | SubAgent関連text | そのまま（既に内容ベース） | SubAgent進捗時のupdate |
+| `handleSubagentComplete` | L213 | SubAgent関連text | そのまま（既に内容ベース） | SubAgent完了時のupdate |
+| `ensureBundle` | L344 | `''`（デフォルト） | `notifyText.update.pending()` → `'...'` | 上書きされなかった場合のフォールバック |
+| `collapseActiveBundle` | L422 | `'bundle collapsed'` | `notifyText.update.collapsed(config)` | 折りたたみ時のupdate |
 
 #### src/streaming/stream-processor.ts
 | 箇所 | 現在 | 変更後 |
 |------|------|--------|
 | テキスト応答の「応答中...」contextブロック | 表示 | 削除 |
-| text生成 | インライン | `notifyText.text(buffer)` |
+| text生成（4箇所の `this.textBuffer.slice(0, 100)`) | インライン | `notifyText.text(buffer)` |
 
 #### src/streaming/tool-formatter.ts
-| 箇所 | 現在 | 変更後 |
-|------|------|--------|
-| ツール完了アイコン | `:white_check_mark:` | `✓` |
-| ツール失敗アイコン | `:x:` | `✗` |
-| `:hourglass_flowing_sand:` 装飾使用 | 表示 | 削除（装飾では使わない） |
+
+全絵文字変更箇所の一覧:
+
+| 関数 | 行 | 現在 | 変更後 |
+|------|-----|------|--------|
+| `buildToolRunningBlocks` | L33 | `:hourglass_flowing_sand:` | 削除（装飾では使わない） |
+| `buildToolCompletedBlocks` | L50 | `:white_check_mark:` / `:x:` | `✓` / `✗` |
+| `buildToolGroupLiveBlocks` | L167-168 | `:white_check_mark:` / `:x:` / `:hourglass_flowing_sand:` | `✓` / `✗` / 削除 |
+| `buildSubagentLiveBlocks` | L184-185 | `:white_check_mark:` / `:x:` / `:hourglass_flowing_sand:` | `✓` / `✗` / 削除 |
 
 ### 4. リアクション（変更なし）
 
@@ -113,3 +131,5 @@ notifyText.update.collapsed(config)        → "💭×1 🔧×3 (2.5s)"
 - bridge-commands.ts内の絵文字 — 管理コマンドの表示で今回の問題と無関係
 - block-builder.tsのフッター統計絵文字 — 結果表示用で通知には影響しない
 - error-handler.tsのエラーtext — エラー内容がそのまま入っているので既に内容ベース
+- index.ts L592-595のエラーpostMessage — エラー内容がそのまま入っているので既に内容ベース
+- modal-builder.ts内の `:white_check_mark:` / `:x:` — モーダル表示専用で通知には影響しない。絵文字分離の方針はストリーミング中の本文内アイコンが対象であり、モーダルは別コンテキスト
