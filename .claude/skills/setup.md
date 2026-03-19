@@ -213,15 +213,33 @@ LOG_LEVEL=info
 
 ## タスク6: Bridge起動・動作確認
 
-以下のコマンドを `run_in_background: true` で実行する：
+### 推奨: launchdで起動
 
+以下のコマンドを順番に実行する：
+
+1. テンプレートからplistを生成：
 ```bash
-npx tsx src/index.ts
+NODE_PATH=$(which node) && PROJECT_DIR=$(pwd) && DATA_DIR="$HOME/.claude-slack-pipe" && mkdir -p ~/Library/LaunchAgents && sed -e "s|{{NODE_PATH}}|$NODE_PATH|g" -e "s|{{PROJECT_DIR}}|$PROJECT_DIR|g" -e "s|{{DATA_DIR}}|$DATA_DIR|g" launchd/com.user.claude-slack-pipe.plist.template > ~/Library/LaunchAgents/com.user.claude-slack-pipe.plist && echo "✅ plist generated"
 ```
 
-起動後の確認：
+2. launchdに登録して起動：
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.claude-slack-pipe.plist && echo "✅ registered"
+```
+
+3. 起動確認（数秒待ってからログを確認）：
+```bash
+sleep 3 && tail -20 ~/.claude-slack-pipe/bridge.stdout.log
+```
 - ログに「Claude Code Slack Bridge is running」が出ることを確認する
-- エラーログが出ていないことを確認する（特にSocket Mode接続エラー）
+
+### 代替: 手動起動
+
+launchdを使わない場合は、以下のコマンドを `run_in_background: true` で実行する：
+
+```bash
+caffeinate -i npx tsx src/index.ts
+```
 
 ### 起動失敗時の切り分け
 
@@ -234,3 +252,5 @@ npx tsx src/index.ts
 すべて正常に起動したら：
 
 > セットアップ完了！Slackから話しかけてみてください。
+>
+> Bridgeの再起動はSlackで `cc /restart-bridge` と送信するだけです。
