@@ -68,8 +68,7 @@ flowchart TB
     style local fill:#e6f3ff,stroke:#4da6ff
 ```
 
-BridgeプロセスはmacOS標準のlaunchdデーモンとして動作します。ログイン時に自動起動し、クラッシュ時も自動で再起動されます。`caffeinate -i` 経由で実行されるため、PCがアイドルスリープすることもありません。つまり、ユーザーがPCの電源をONにしている間は常にSlackから使えるようになります。
-
 ローカルPCで立ち上げたNode.jsプロセス（親プロセス）が、Socket ModeでSlackと繋がっています。Slackから来たメッセージを整形して、Claude Code CLIの子プロセスにstdinで渡します。この結果はstdoutでNode.jsプロセス（親プロセス）に返ってくるので、Slackで表示できる形に変換してAPIで投稿します。
 
-※ Claude Code CLIの子プロセスは`claude -p`コマンドで立ち上げます。このコマンドは非対話モードを指定するコマンドで、stdin/stdoutでClaude Code CLIを使えます。
+- 親プロセスはmacOS標準のlaunchdデーモンとして動作させています。なので、ログイン時に自動起動し、クラッシュ時も自動で再起動されます。`caffeinate -i` 経由で実行されるため、PCがアイドルスリープすることもありません。つまり、ユーザーがPCの電源をONにしている間は常にSlackから使えるようになります。
+- 子プロセスのClaude Code CLIは`claude -p`コマンドで立ち上げます。このコマンドは非対話モードを指定するコマンドで、stdin/stdoutでClaude Code CLIを使えます。
