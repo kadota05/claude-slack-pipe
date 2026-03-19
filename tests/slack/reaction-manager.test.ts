@@ -35,7 +35,7 @@ describe('ReactionManager (phase2)', () => {
 
   describe('replaceWithProcessing', () => {
     it('removes hourglass and adds brain', async () => {
-      await rm.replaceWithProcessing('C001', '123');
+      await rm.replaceWithProcessing('test-session', 'C001', '123');
       expect(client.reactions.remove).toHaveBeenCalledWith({
         channel: 'C001', timestamp: '123', name: 'hourglass_flowing_sand',
       });
@@ -47,7 +47,7 @@ describe('ReactionManager (phase2)', () => {
 
   describe('replaceWithDone', () => {
     it('removes brain and adds check mark', async () => {
-      await rm.replaceWithDone('C001', '123');
+      await rm.replaceWithDone('test-session', 'C001', '123');
       expect(client.reactions.remove).toHaveBeenCalledWith({
         channel: 'C001', timestamp: '123', name: 'brain',
       });
@@ -57,7 +57,7 @@ describe('ReactionManager (phase2)', () => {
     });
 
     it('does NOT auto-remove check mark after 3 seconds', async () => {
-      await rm.replaceWithDone('C001', '123');
+      await rm.replaceWithDone('test-session', 'C001', '123');
       client.reactions.remove.mockClear();
       vi.advanceTimersByTime(5000);
       await vi.runAllTimersAsync();
@@ -69,10 +69,10 @@ describe('ReactionManager (phase2)', () => {
 
   describe('replaceWithProcessing clears previous checkmark', () => {
     it('removes previous checkmark when starting new processing', async () => {
-      await rm.replaceWithDone('C001', '100');
+      await rm.replaceWithDone('test-session', 'C001', '100');
       client.reactions.remove.mockClear();
       client.reactions.add.mockClear();
-      await rm.replaceWithProcessing('C001', '200');
+      await rm.replaceWithProcessing('test-session', 'C001', '200');
       expect(client.reactions.remove).toHaveBeenCalledWith({
         channel: 'C001', timestamp: '100', name: 'white_check_mark',
       });
@@ -82,7 +82,7 @@ describe('ReactionManager (phase2)', () => {
     });
 
     it('works when there is no previous checkmark', async () => {
-      await rm.replaceWithProcessing('C001', '200');
+      await rm.replaceWithProcessing('test-session', 'C001', '200');
       expect(client.reactions.add).toHaveBeenCalledWith({
         channel: 'C001', timestamp: '200', name: 'brain',
       });
@@ -94,6 +94,38 @@ describe('ReactionManager (phase2)', () => {
       await rm.addQueued('C001', '123');
       expect(client.reactions.add).toHaveBeenCalledWith({
         channel: 'C001', timestamp: '123', name: 'hourglass_flowing_sand',
+      });
+    });
+  });
+
+  describe('session-scoped lastDone', () => {
+    it('replaceWithProcessing only clears checkmark from same session', async () => {
+      await rm.replaceWithDone('session-A', 'C001', '100');
+      client.reactions.remove.mockClear();
+      client.reactions.add.mockClear();
+      await rm.replaceWithProcessing('session-B', 'C001', '200');
+      expect(client.reactions.remove).not.toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '100', name: 'white_check_mark',
+      });
+    });
+
+    it('replaceWithProcessing clears checkmark from same session', async () => {
+      await rm.replaceWithDone('session-A', 'C001', '100');
+      client.reactions.remove.mockClear();
+      client.reactions.add.mockClear();
+      await rm.replaceWithProcessing('session-A', 'C001', '200');
+      expect(client.reactions.remove).toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '100', name: 'white_check_mark',
+      });
+    });
+
+    it('cleanupSession removes session entry from map', async () => {
+      await rm.replaceWithDone('session-A', 'C001', '100');
+      rm.cleanupSession('session-A');
+      client.reactions.remove.mockClear();
+      await rm.replaceWithProcessing('session-A', 'C001', '200');
+      expect(client.reactions.remove).not.toHaveBeenCalledWith({
+        channel: 'C001', timestamp: '100', name: 'white_check_mark',
       });
     });
   });

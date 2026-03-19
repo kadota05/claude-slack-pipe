@@ -18,6 +18,7 @@ interface StreamProcessorConfig {
   threadTs: string;
   sessionId: string;
   tunnelManager?: TunnelManager;
+  onFirstContent?: () => void;
 }
 
 export class StreamProcessor {
@@ -27,6 +28,7 @@ export class StreamProcessor {
   private textBuffer = '';
   private textMessageTs: string | null = null;
   private mainToolUseCount = 0;
+  private firstContentReceived = false;
 
   constructor(config: StreamProcessorConfig) {
     this.config = config;
@@ -35,6 +37,19 @@ export class StreamProcessor {
   }
 
   async processEvent(event: any): Promise<ProcessedActions> {
+    // Detect first content for reaction timing (top-level only)
+    if (!this.firstContentReceived) {
+      if (event.type === 'assistant' && event.message?.content) {
+        const hasContent = event.message.content.some(
+          (block: any) => block.type === 'thinking' || block.type === 'text' || block.type === 'tool_use'
+        );
+        if (hasContent) {
+          this.firstContentReceived = true;
+          this.config.onFirstContent?.();
+        }
+      }
+    }
+
     const parentToolUseId = event.parent_tool_use_id || null;
     const result: ProcessedActions = { bundleActions: [] };
 
@@ -73,6 +88,7 @@ export class StreamProcessor {
     this.textBuffer = '';
     this.textMessageTs = null;
     this.mainToolUseCount = 0;
+    this.firstContentReceived = false;
   }
 
   dispose(): void {

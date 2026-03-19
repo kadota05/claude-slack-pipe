@@ -421,19 +421,9 @@ async function main(): Promise<void> {
       session.sendInitialPrompt(prompt);
       await reactionManager.addSpawning(channelId, messageTs);
 
-      // Replace hourglass with brain when CLI starts processing
-      const onStateChange = (_from: string, to: string) => {
-        if (to === 'processing') {
-          reactionManager.replaceWithProcessing(channelId, messageTs);
-          session.removeListener('stateChange', onStateChange);
-        }
-      };
-      session.on('stateChange', onStateChange);
-
       try {
         await waitForIdle(session);
       } catch (err) {
-        session.removeListener('stateChange', onStateChange);
         await app.client.chat.postMessage({
           channel: channelId,
           thread_ts: threadTs,
@@ -448,7 +438,7 @@ async function main(): Promise<void> {
     // Send prompt or queue (existing/idle session)
     if (session.state === 'idle') {
       activeMessageTs.set(session.sessionId, messageTs);
-      await reactionManager.replaceWithProcessing(channelId, messageTs);
+      await reactionManager.addSpawning(channelId, messageTs);
       session.sendPrompt(prompt);
     } else if (session.state === 'processing') {
       const queue = coordinator.getSessionQueue(indexEntry.cliSessionId);
@@ -490,6 +480,12 @@ async function main(): Promise<void> {
       threadTs,
       sessionId: session.sessionId,
       tunnelManager,
+      onFirstContent: () => {
+        const msgTs = activeMessageTs.get(session.sessionId);
+        if (msgTs) {
+          void rm.replaceWithProcessing(session.sessionId, channelId, msgTs);
+        }
+      },
     });
     const serialQueue = new SerialActionQueue();
 
@@ -575,7 +571,7 @@ async function main(): Promise<void> {
             });
 
             const msgTs = activeMessageTs.get(session.sessionId) || threadTs;
-            await rm.replaceWithDone(channelId, msgTs);
+            await rm.replaceWithDone(session.sessionId, channelId, msgTs);
             activeMessageTs.delete(session.sessionId);
 
             indexStore.update(
@@ -606,6 +602,7 @@ async function main(): Promise<void> {
       if (to === 'dead' || to === 'ending') {
         streamProcessor.dispose();
         wiredSessions.delete(session.sessionId);
+        rm.cleanupSession(session.sessionId);
       }
     });
   }

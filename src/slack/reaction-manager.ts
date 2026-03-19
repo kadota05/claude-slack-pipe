@@ -2,7 +2,7 @@
 import { logger } from '../utils/logger.js';
 
 export class ReactionManager {
-  private lastDone: { channel: string; ts: string } | null = null;
+  private lastDoneBySession = new Map<string, { channel: string; ts: string }>();
 
   constructor(private readonly client: any) {}
 
@@ -10,19 +10,20 @@ export class ReactionManager {
     await this.safeAdd(channel, timestamp, 'hourglass_flowing_sand');
   }
 
-  async replaceWithProcessing(channel: string, timestamp: string): Promise<void> {
-    if (this.lastDone !== null) {
-      await this.safeRemove(this.lastDone.channel, this.lastDone.ts, 'white_check_mark');
-      this.lastDone = null;
+  async replaceWithProcessing(sessionId: string, channel: string, timestamp: string): Promise<void> {
+    const lastDone = this.lastDoneBySession.get(sessionId);
+    if (lastDone) {
+      await this.safeRemove(lastDone.channel, lastDone.ts, 'white_check_mark');
+      this.lastDoneBySession.delete(sessionId);
     }
     await this.safeRemove(channel, timestamp, 'hourglass_flowing_sand');
     await this.safeAdd(channel, timestamp, 'brain');
   }
 
-  async replaceWithDone(channel: string, timestamp: string): Promise<void> {
+  async replaceWithDone(sessionId: string, channel: string, timestamp: string): Promise<void> {
     await this.safeRemove(channel, timestamp, 'brain');
     await this.safeAdd(channel, timestamp, 'white_check_mark');
-    this.lastDone = { channel, ts: timestamp };
+    this.lastDoneBySession.set(sessionId, { channel, ts: timestamp });
   }
 
   async removeProcessing(channel: string, timestamp: string): Promise<void> {
@@ -32,6 +33,10 @@ export class ReactionManager {
 
   async addQueued(channel: string, timestamp: string): Promise<void> {
     await this.safeAdd(channel, timestamp, 'hourglass_flowing_sand');
+  }
+
+  cleanupSession(sessionId: string): void {
+    this.lastDoneBySession.delete(sessionId);
   }
 
   private async safeAdd(channel: string, timestamp: string, name: string): Promise<void> {
