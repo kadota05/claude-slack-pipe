@@ -944,6 +944,7 @@ async function main(): Promise<void> {
     logger.warn('[Resilience] WiFi disconnected, notifying active sessions');
 
     // Notify recently active sessions (within 10 minutes)
+    // ISO 8601 strings compare lexicographically in time order
     const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
     const recentSessions = sessionIndexStore.getActive()
       .filter((e) => e.lastActiveAt >= cutoff);
@@ -973,8 +974,9 @@ async function main(): Promise<void> {
     await new Promise((r) => setTimeout(r, 2000));
 
     // Post reconnect notification to threads that got disconnect notice
+    const threads = disconnectNotifiedThreads.splice(0); // consume and clear
     const pendingMessages: Array<{ channel: string; ts: string; thread_ts: string }> = [];
-    for (const thread of disconnectNotifiedThreads) {
+    for (const thread of threads) {
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           const result = await app.client.chat.postMessage({
