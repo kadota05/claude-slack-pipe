@@ -2,6 +2,7 @@
 import { EventEmitter } from 'node:events';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { logger } from '../utils/logger.js';
+import { SLACK_CONTEXT_PREFIX } from './slack-context.js';
 import type {
   SessionStartParams,
   SessionState,
@@ -92,7 +93,7 @@ export class PersistentSession extends EventEmitter {
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: prompt }],
+        content: [{ type: 'text', text: SLACK_CONTEXT_PREFIX + '\n' + prompt }],
       },
     });
     this.transition('processing');
@@ -112,7 +113,7 @@ export class PersistentSession extends EventEmitter {
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: prompt }],
+        content: [{ type: 'text', text: SLACK_CONTEXT_PREFIX + '\n' + prompt }],
       },
     });
     logger.info(`[${this.sessionId}] initial prompt written to stdin (before init)`);
