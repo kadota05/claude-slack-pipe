@@ -241,4 +241,29 @@ describe('GroupTracker with ActionBundle', () => {
       expect(actions2.find(a => a.type === 'collapse')).toBeDefined();
     });
   });
+
+  describe('notification text values', () => {
+    it('thinking postMessage uses notifyText.update.thinking()', () => {
+      const actions = tracker.handleThinking('thought');
+      expect(actions[0].text).toBe('💭 思考中');
+    });
+
+    it('collapse uses notifyText.update.collapsed()', () => {
+      const a1 = tracker.handleThinking('thought');
+      tracker.registerBundleMessageTs(a1[0].bundleId, 'TS');
+      tracker.handleToolUse('t1', 'Read', { file_path: '/a.ts' });
+      tracker.handleToolResult('t1', 'content', false);
+      const collapse = tracker.handleTextStart('sess-1');
+      const c = collapse.find(a => a.type === 'collapse');
+      expect(c!.text).not.toBe('bundle collapsed');
+      expect(c!.text).toContain('💭');
+      expect(c!.text).toContain('🔧');
+    });
+
+    it('ensureBundle default text is not empty', () => {
+      const actions = tracker.handleThinking('thought');
+      expect(actions[0].text).toBeTruthy();
+      expect(actions[0].text).not.toBe('');
+    });
+  });
 });

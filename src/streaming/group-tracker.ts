@@ -13,6 +13,7 @@ import type {
   CompletedGroup,
   Block,
 } from './types.js';
+import { notifyText } from './notification-text.js';
 
 const DEBOUNCE_MS = 500;
 
@@ -51,13 +52,13 @@ export class GroupTracker {
         const postAction = actions.find(a => a.type === 'postMessage');
         if (postAction) {
           postAction.blocks = buildThinkingLiveBlocks(this.activeGroup.thinkingTexts);
-          postAction.text = '思考中...';
+          postAction.text = notifyText.update.thinking();
         }
       } else if (this.activeBundle!.messageTs) {
         // Bundle exists, just switched category — update message
         actions.push(this.buildUpdateAction(
           buildThinkingLiveBlocks(this.activeGroup.thinkingTexts),
-          '思考中...',
+          notifyText.update.thinking(),
         ));
       }
     } else {
@@ -67,7 +68,7 @@ export class GroupTracker {
         this.activeGroup.lastUpdateTime = Date.now();
         actions.push(this.buildUpdateAction(
           buildThinkingLiveBlocks(this.activeGroup.thinkingTexts),
-          '思考中...',
+          notifyText.update.thinking(),
         ));
       }
     }
@@ -111,7 +112,7 @@ export class GroupTracker {
         this.activeGroup.lastUpdateTime = Date.now();
         actions.push(this.buildUpdateAction(
           buildToolGroupLiveBlocks(this.activeGroup.tools),
-          `${this.activeGroup.tools.length}ツール実行中`,
+          notifyText.update.tools(this.activeGroup.tools),
         ));
       }
     }
@@ -136,7 +137,7 @@ export class GroupTracker {
       this.activeGroup.lastUpdateTime = Date.now();
       actions.push(this.buildUpdateAction(
         buildToolGroupLiveBlocks(this.activeGroup.tools),
-        `${this.activeGroup.tools.length}ツール実行中`,
+        notifyText.update.tools(this.activeGroup.tools),
       ));
     }
 
@@ -341,7 +342,7 @@ export class GroupTracker {
       bundleId: this.activeBundle.id,
       bundleIndex: this.activeBundle.index,
       blocks: [], // will be filled by caller
-      text: '',
+      text: notifyText.update.pending(),
     });
 
     return true;
@@ -419,7 +420,13 @@ export class GroupTracker {
         bundleIndex: bundle.index,
         messageTs: bundle.messageTs,
         blocks,
-        text: 'bundle collapsed',
+        text: notifyText.update.collapsed({
+          thinkingCount,
+          toolCount,
+          toolDurationMs,
+          subagentCount,
+          subagentDurationMs,
+        }),
         sessionId,
       });
     }
