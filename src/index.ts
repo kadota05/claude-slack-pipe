@@ -936,34 +936,10 @@ async function main(): Promise<void> {
   // --- WiFi resilience: auto-reconnect on network change ---
   const networkWatcher = new NetworkWatcher();
 
-  // Track which threads received disconnect notifications (for reconnect updates)
-  const disconnectNotifiedThreads: Array<{ channel: string; threadTs: string }> = [];
-
-  networkWatcher.on('disconnected', async () => {
+  networkWatcher.on('disconnected', () => {
     if (isShuttingDown) return;
-    logger.warn('[Resilience] WiFi disconnected, notifying active sessions');
-
-    // Notify recently active sessions (within 10 minutes)
-    // ISO 8601 strings compare lexicographically in time order
-    const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    const recentSessions = sessionIndexStore.getActive()
-      .filter((e) => e.lastActiveAt >= cutoff);
-
-    for (const entry of recentSessions) {
-      try {
-        await app.client.chat.postMessage({
-          channel: entry.channelId,
-          thread_ts: entry.threadTs,
-          text: '⚠️ PCのWiFi接続が切れました。再接続されるまでメッセージは処理されません。',
-        });
-        disconnectNotifiedThreads.push({
-          channel: entry.channelId,
-          threadTs: entry.threadTs,
-        });
-      } catch {
-        // Best-effort: network may already be down
-      }
-    }
+    logger.warn('[Resilience] WiFi disconnected');
+    // Notification is deferred to reconnect — network is already down at this point
   });
 
   networkWatcher.on('reconnected', async () => {
@@ -973,22 +949,26 @@ async function main(): Promise<void> {
     // Wait for DHCP/DNS to stabilize
     await new Promise((r) => setTimeout(r, 2000));
 
-    // Post reconnect notification to threads that got disconnect notice
-    const threads = disconnectNotifiedThreads.splice(0); // consume and clear
+    // Notify recently active sessions (within 10 minutes)
+    // ISO 8601 strings compare lexicographically in time order
+    const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const recentSessions = sessionIndexStore.getActive()
+      .filter((e) => e.lastActiveAt >= cutoff);
+
     const pendingMessages: Array<{ channel: string; ts: string; thread_ts: string }> = [];
-    for (const thread of threads) {
+    for (const entry of recentSessions) {
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           const result = await app.client.chat.postMessage({
-            channel: thread.channel,
-            thread_ts: thread.threadTs,
-            text: '🔄 WiFiの再接続を検知しました。Bridgeを再起動しています...',
+            channel: entry.channelId,
+            thread_ts: entry.threadTs,
+            text: '🔄 WiFi切断のため一時停止していました。再接続を検知したのでBridgeを再起動しています...',
           });
           if (result.ts) {
             pendingMessages.push({
-              channel: thread.channel,
+              channel: entry.channelId,
               ts: result.ts,
-              thread_ts: thread.threadTs,
+              thread_ts: entry.threadTs,
             });
           }
           break;
