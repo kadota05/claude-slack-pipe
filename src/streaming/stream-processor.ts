@@ -6,6 +6,7 @@ import { GroupTracker } from './group-tracker.js';
 import { TunnelManager } from './tunnel-manager.js';
 import { notifyText } from './notification-text.js';
 import { extractLocalUrls, rewriteLocalUrls } from './localhost-rewriter.js';
+import type { TokenUsage } from '../types.js';
 import type {
   SlackAction,
   ProcessedActions,
@@ -27,7 +28,7 @@ export class StreamProcessor {
   private readonly tunnelManager?: TunnelManager;
   private textBuffer = '';
   private textMessageTs: string | null = null;
-  private mainToolUseCount = 0;
+  private lastMainUsage: TokenUsage | null = null;
   private firstContentReceived = false;
 
   constructor(config: StreamProcessorConfig) {
@@ -54,6 +55,10 @@ export class StreamProcessor {
     const result: ProcessedActions = { bundleActions: [] };
 
     if (event.type === 'assistant' && event.message?.content) {
+      // Track last main-agent usage for context window calculation
+      if (!parentToolUseId && event.message.usage) {
+        this.lastMainUsage = event.message.usage;
+      }
       this.handleAssistant(event.message.content, parentToolUseId, result);
     } else if (event.type === 'user' && event.message?.content) {
       this.handleUser(event.message.content, parentToolUseId, result);
@@ -87,7 +92,7 @@ export class StreamProcessor {
   reset(): void {
     this.textBuffer = '';
     this.textMessageTs = null;
-    this.mainToolUseCount = 0;
+    this.lastMainUsage = null;
     this.firstContentReceived = false;
   }
 
@@ -138,7 +143,6 @@ export class StreamProcessor {
 
     // Agent tool = new subagent
     if (toolName === 'Agent') {
-      this.mainToolUseCount++;
       const description = String(input.description || input.prompt || 'SubAgent');
       const actions = this.groupTracker.handleSubagentStart(toolUseId, description);
       result.bundleActions.push(...actions);
@@ -146,7 +150,6 @@ export class StreamProcessor {
     }
 
     // Normal tool
-    this.mainToolUseCount++;
     const actions = this.groupTracker.handleToolUse(toolUseId, toolName, input);
     result.bundleActions.push(...actions);
   }
@@ -317,7 +320,7 @@ export class StreamProcessor {
     }
 
     result.resultEvent = event;
-    result.mainApiCallCount = this.mainToolUseCount + 1;
+    result.lastMainUsage = this.lastMainUsage;
   }
 
   private buildTextBlocks(mrkdwn: string): Block[] {
