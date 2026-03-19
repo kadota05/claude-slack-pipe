@@ -202,18 +202,19 @@ function formatDuration(ms: number): string {
 }
 
 export function buildResponseFooter(params: {
-  inputTokens: number;
-  outputTokens: number;
   contextUsed: number;
   contextWindow: number;
   model: string;
   durationMs: number;
+  isApproximate?: boolean;
 }): any[] {
-  const ctxPct = (params.contextUsed / params.contextWindow) * 100;
+  const capped = Math.min(params.contextUsed, params.contextWindow);
+  const ctxPct = (capped / params.contextWindow) * 100;
   const ctxWindowLabel = params.contextWindow >= 1_000_000
     ? `${(params.contextWindow / 1_000_000).toFixed(0)}M`
     : `${(params.contextWindow / 1_000).toFixed(0)}k`;
-  const text = `tokens in:${formatTokens(params.inputTokens)} out:${formatTokens(params.outputTokens)} | ctx ${formatTokens(params.contextUsed)}/${ctxWindowLabel}(${ctxPct.toFixed(1)}%) | ${params.model} | ${formatDuration(params.durationMs)}`;
+  const approx = params.isApproximate ? '~' : '';
+  const text = `ctx ${approx}${formatTokens(capped)}/${ctxWindowLabel}(${ctxPct.toFixed(1)}%) | ${params.model} | ${formatDuration(params.durationMs)}`;
   return [{
     type: 'context',
     elements: [{ type: 'mrkdwn', text }],
