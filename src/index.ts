@@ -905,16 +905,31 @@ async function main(): Promise<void> {
   const restartPendingFile = path.join(os.homedir(), '.claude-slack-pipe', 'restart-pending.json');
   try {
     if (fs.existsSync(restartPendingFile)) {
-      const pending = JSON.parse(fs.readFileSync(restartPendingFile, 'utf-8'));
+      const raw = JSON.parse(fs.readFileSync(restartPendingFile, 'utf-8'));
       fs.unlinkSync(restartPendingFile);
-      await app.client.chat.update({
-        channel: pending.channel,
-        ts: pending.ts,
-        text: '✅ Bridgeの再起動が完了しました',
-      });
+
+      // Support both old format ({ channel, ts }) and new format ({ messages: [...] })
+      const messages: Array<{ channel: string; ts: string }> =
+        raw.messages ? raw.messages : [raw];
+
+      for (const pending of messages) {
+        if (!pending.channel || !pending.ts) continue;
+        try {
+          await app.client.chat.update({
+            channel: pending.channel,
+            ts: pending.ts,
+            text: '✅ Bridgeの再起動が完了しました',
+          });
+        } catch (err) {
+          logger.warn('Failed to update restart message', {
+            channel: pending.channel, ts: pending.ts,
+            error: (err as Error).message,
+          });
+        }
+      }
     }
   } catch (err) {
-    logger.warn('Failed to update restart message', { error: (err as Error).message });
+    logger.warn('Failed to process restart-pending file', { error: (err as Error).message });
   }
 
   // Graceful shutdown
