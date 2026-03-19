@@ -25,6 +25,8 @@ describe('config', () => {
     delete process.env.MAX_TIMEOUT_MS;
     delete process.env.LOG_LEVEL;
     delete process.env.DATA_DIR;
+    delete process.env.AUTO_UPDATE_ENABLED;
+    delete process.env.AUTO_UPDATE_INTERVAL_MS;
   });
 
   it('should load config from env vars', async () => {
@@ -106,5 +108,21 @@ describe('config', () => {
 
     const { loadConfig } = await import('../src/config.js');
     expect(() => loadConfig()).toThrow();
+  });
+
+  it('should include autoUpdateEnabled defaulting to true', async () => {
+    delete process.env.AUTO_UPDATE_ENABLED;
+    Object.assign(process.env, requiredEnv);
+    const { loadConfig } = await import('../src/config.js');
+    const config = loadConfig();
+    expect(config.autoUpdateEnabled).toBe(true);
+  });
+
+  it('should include autoUpdateIntervalMs defaulting to 1800000', async () => {
+    delete process.env.AUTO_UPDATE_INTERVAL_MS;
+    Object.assign(process.env, requiredEnv);
+    const { loadConfig } = await import('../src/config.js');
+    const config = loadConfig();
+    expect(config.autoUpdateIntervalMs).toBe(1800000);
   });
 });

@@ -31,6 +31,8 @@ const configSchema = z.object({
   defaultTimeoutMs: z.number().int().positive(),
   maxTimeoutMs: z.number().int().positive(),
   logLevel: z.enum(['error', 'warn', 'info', 'debug']),
+  autoUpdateEnabled: z.boolean().default(true),
+  autoUpdateIntervalMs: z.number().int().positive().default(1800000),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -50,6 +52,8 @@ export function loadConfig(): AppConfig {
     defaultTimeoutMs: Number(process.env.DEFAULT_TIMEOUT_MS || '300000'),
     maxTimeoutMs: Number(process.env.MAX_TIMEOUT_MS || '1800000'),
     logLevel: (process.env.LOG_LEVEL as AppConfig['logLevel']) || 'info',
+    autoUpdateEnabled: process.env.AUTO_UPDATE_ENABLED !== 'false',
+    autoUpdateIntervalMs: Number(process.env.AUTO_UPDATE_INTERVAL_MS || '1800000'),
   };
   return configSchema.parse(raw);
 }
