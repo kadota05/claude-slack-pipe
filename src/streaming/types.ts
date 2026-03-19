@@ -1,6 +1,7 @@
 // ============================================================
 // Streaming Type Definitions
 // ============================================================
+import type { TokenUsage } from '../types.js';
 
 // --- SlackAction: Executorに渡すアクション指示 ---
 
@@ -174,7 +175,7 @@ export interface ProcessedActions {
   bundleActions: BundleAction[];
   textAction?: SlackAction;
   resultEvent?: any;
-  mainApiCallCount?: number;
+  lastMainUsage?: TokenUsage | null;
 }
 
 // Reusable block type
