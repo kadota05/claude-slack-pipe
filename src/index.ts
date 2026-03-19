@@ -29,6 +29,7 @@ import { SessionJsonlReader } from './streaming/session-jsonl-reader.js';
 import { SubagentJsonlReader } from './streaming/subagent-jsonl-reader.js';
 import { RecentSessionScanner } from './store/recent-session-scanner.js';
 import { TunnelManager } from './streaming/tunnel-manager.js';
+import { NetworkWatcher } from './utils/network-watcher.js';
 
 function waitForIdle(session: PersistentSession, timeoutMs = 300000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -932,6 +933,83 @@ async function main(): Promise<void> {
     logger.warn('Failed to process restart-pending file', { error: (err as Error).message });
   }
 
+  // --- WiFi resilience: auto-reconnect on network change ---
+  const networkWatcher = new NetworkWatcher();
+
+  // Track which threads received disconnect notifications (for reconnect updates)
+  const disconnectNotifiedThreads: Array<{ channel: string; threadTs: string }> = [];
+
+  networkWatcher.on('disconnected', async () => {
+    if (isShuttingDown) return;
+    logger.warn('[Resilience] WiFi disconnected, notifying active sessions');
+
+    // Notify recently active sessions (within 10 minutes)
+    const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const recentSessions = sessionIndexStore.getActive()
+      .filter((e) => e.lastActiveAt >= cutoff);
+
+    for (const entry of recentSessions) {
+      try {
+        await app.client.chat.postMessage({
+          channel: entry.channelId,
+          thread_ts: entry.threadTs,
+          text: '⚠️ PCのWiFi接続が切れました。再接続されるまでメッセージは処理されません。',
+        });
+        disconnectNotifiedThreads.push({
+          channel: entry.channelId,
+          threadTs: entry.threadTs,
+        });
+      } catch {
+        // Best-effort: network may already be down
+      }
+    }
+  });
+
+  networkWatcher.on('reconnected', async () => {
+    if (isShuttingDown) return;
+    logger.info('[Resilience] WiFi reconnected, restarting Bridge via launchd');
+
+    // Wait for DHCP/DNS to stabilize
+    await new Promise((r) => setTimeout(r, 2000));
+
+    // Post reconnect notification to threads that got disconnect notice
+    const pendingMessages: Array<{ channel: string; ts: string; thread_ts: string }> = [];
+    for (const thread of disconnectNotifiedThreads) {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const result = await app.client.chat.postMessage({
+            channel: thread.channel,
+            thread_ts: thread.threadTs,
+            text: '🔄 WiFiの再接続を検知しました。Bridgeを再起動しています...',
+          });
+          if (result.ts) {
+            pendingMessages.push({
+              channel: thread.channel,
+              ts: result.ts,
+              thread_ts: thread.threadTs,
+            });
+          }
+          break;
+        } catch {
+          if (attempt < 3) await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
+    }
+
+    // Save pending messages for the new process to update
+    if (pendingMessages.length > 0) {
+      const restartFile = path.join(os.homedir(), '.claude-slack-pipe', 'restart-pending.json');
+      try {
+        fs.writeFileSync(restartFile, JSON.stringify({ messages: pendingMessages }));
+      } catch { /* best-effort */ }
+    }
+
+    // Reuse existing shutdown flow (same as /restart-bridge)
+    await shutdown('wifi-reconnect');
+  });
+
+  networkWatcher.start();
+
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     isShuttingDown = true;
@@ -941,6 +1019,7 @@ async function main(): Promise<void> {
       coordinator.endSession(entry.cliSessionId);
     }
     tunnelManager.stopAll();
+    networkWatcher.stop();
     // Clear crash history on intentional restart so it doesn't trigger circuit breaker
     if ((signal === 'restart-bridge' || signal === 'wifi-reconnect') && process.env.MANAGED_BY_LAUNCHD) {
       const crashFile = path.join(os.homedir(), '.claude-slack-pipe', 'crash-history.json');
