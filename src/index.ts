@@ -70,8 +70,10 @@ async function main(): Promise<void> {
     // Keep only entries within 60s window, cap at 4
     history = history.filter((t) => now - t < 60_000).slice(-4);
     if (history.length >= 4) {
-      logger.error('Crash loop detected (5 crashes in 60s), exiting. Fix the issue and restart with: launchctl kickstart gui/$(id -u)/com.user.claude-slack-pipe');
-      process.exit(0); // exit(0) so launchd KeepAlive doesn't respawn
+      logger.error('Crash loop detected (5 crashes in 60s). Sleeping 5 minutes before retry. Fix the issue and restart with: launchctl kickstart -k gui/$(id -u)/com.user.claude-slack-pipe');
+      await new Promise((resolve) => setTimeout(resolve, 300_000));
+      // Clear history after sleep so we get a fresh start
+      fs.writeFileSync(crashFile, '[]');
     }
     history.push(now);
     fs.mkdirSync(path.dirname(crashFile), { recursive: true });
@@ -882,6 +884,11 @@ async function main(): Promise<void> {
     }
     tunnelManager.stopAll();
     pidLock?.release();
+    // Clear crash history on intentional restart so it doesn't trigger circuit breaker
+    if (signal === 'restart-bridge' && process.env.MANAGED_BY_LAUNCHD) {
+      const crashFile = path.join(os.homedir(), '.claude-slack-pipe', 'crash-history.json');
+      try { fs.writeFileSync(crashFile, '[]'); } catch { /* best-effort */ }
+    }
     await app.stop();
     process.exit(0);
   };
