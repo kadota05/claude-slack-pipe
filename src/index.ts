@@ -31,6 +31,7 @@ import { notifyText } from './streaming/notification-text.js';
 import { RecentSessionScanner } from './store/recent-session-scanner.js';
 import { TunnelManager } from './streaming/tunnel-manager.js';
 import { NetworkWatcher } from './utils/network-watcher.js';
+import { AutoUpdater } from './auto-updater.js';
 
 function waitForIdle(session: PersistentSession, timeoutMs = 300000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -191,6 +192,16 @@ async function main(): Promise<void> {
       for (const [k, v] of recentNewThreadMessages) {
         if (now - v.time > 60_000) recentNewThreadMessages.delete(k);
       }
+    }
+
+    // Block messages during auto-update
+    if (autoUpdater?.isPendingUpdate()) {
+      await app.client.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: '🔄 システムを最新バージョンに更新中です。少々お待ちください。',
+      });
+      return;
     }
 
     logger.info('[DEBUG] auth check', { userId, allowed: auth.isAllowed(userId) });
@@ -994,9 +1005,13 @@ async function main(): Promise<void> {
 
   networkWatcher.start();
 
+  // Auto-updater (assigned after shutdown definition to avoid TDZ)
+  let autoUpdater: AutoUpdater | null = null;
+
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     isShuttingDown = true;
+    autoUpdater?.stop();
     logger.info(`Received ${signal}, shutting down...`);
     // End all alive sessions
     for (const entry of sessionIndexStore.getActive()) {
@@ -1005,13 +1020,30 @@ async function main(): Promise<void> {
     tunnelManager.stopAll();
     networkWatcher.stop();
     // Clear crash history on intentional restart so it doesn't trigger circuit breaker
-    if ((signal === 'restart-bridge' || signal === 'wifi-reconnect') && process.env.MANAGED_BY_LAUNCHD) {
+    if ((signal === 'restart-bridge' || signal === 'wifi-reconnect' || signal === 'auto-update') && process.env.MANAGED_BY_LAUNCHD) {
       const crashFile = path.join(os.homedir(), '.claude-slack-pipe', 'crash-history.json');
       try { fs.writeFileSync(crashFile, '[]'); } catch { /* best-effort */ }
     }
     await app.stop();
     process.exit(0);
   };
+
+  // Initialize auto-updater: polls git for updates and restarts when idle
+  autoUpdater = new AutoUpdater({
+    sessionCoordinator: coordinator,
+    shutdown,
+    interval: config.autoUpdateIntervalMs,
+    enabled: config.autoUpdateEnabled,
+    projectRoot: process.cwd(),
+  });
+
+  coordinator.onIdleCallback = () => {
+    autoUpdater!.onSessionIdle().catch((err) => {
+      logger.warn('[AutoUpdater] onSessionIdle failed', { error: err?.message });
+    });
+  };
+
+  autoUpdater.start();
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
