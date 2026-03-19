@@ -53,6 +53,10 @@ result.lastMainUsage = this.lastMainUsage;
 
 各assistantメッセージの `usage.input_tokens` はそのステップでAPIに送った全トークン量（会話履歴 + ツール結果）。ツールを使うほど膨らむため、最終ステップの値が現在のコンテキストウィンドウ使用量に最も近い。
 
+最終assistantステップはユーザーへのテキスト応答であり、その時点で会話履歴全体（過去のツール結果含む）がinputに含まれるため、通常はターン内で最大の`input_tokens`になる。
+
+> **要検証**: stream-jsonモードの`assistant`イベントに`message.usage`が実際に含まれるかは、実装前にログ出力で確認すること。Agent SDKのドキュメントでは`BetaMessage`に`usage`があると記載されているが、CLIの出力形式に依存する可能性がある。
+
 ### 変更2: index.tsのフッター計算を差し替え
 
 **ファイル**: `src/index.ts`
@@ -76,6 +80,21 @@ const contextUsed = (lastUsage.input_tokens || 0)
 - `lastMainUsage` が取れない場合（古いCLIバージョン等）は `result.usage` にフォールバック
 - `mainApiCallCount` による除算を削除
 
+フッター呼び出し側の変更:
+```typescript
+const footerBlocks = buildResponseFooter({
+  contextUsed,
+  contextWindow,
+  model: sessionModel || 'unknown',
+  durationMs: resultEvent.duration_ms || 0,
+});
+```
+
+ログ出力の変更:
+```typescript
+logger.info(`[${session.sessionId}] ctx: ${contextUsed} / ${contextWindow} (${(contextUsed / contextWindow * 100).toFixed(1)}%)`);
+```
+
 ### 変更3: フッター表示のシンプル化
 
 **ファイル**: `src/slack/block-builder.ts`
@@ -91,7 +110,21 @@ ctx 28.2k/1M(2.8%) | opus-4-6 | 45.2s
 ```
 
 - `tokens in:X out:Y` を削除
-- `buildResponseFooter` のパラメータから `inputTokens` / `outputTokens` を削除
+- `buildResponseFooter` の新しいシグネチャ:
+
+```typescript
+export function buildResponseFooter(params: {
+  contextUsed: number;
+  contextWindow: number;
+  model: string;
+  durationMs: number;
+}): any[]
+```
+
+表示文字列:
+```typescript
+const text = `ctx ${formatTokens(params.contextUsed)}/${ctxWindowLabel}(${ctxPct.toFixed(1)}%) | ${params.model} | ${formatDuration(params.durationMs)}`;
+```
 
 ### 変更4: ProcessedActions型の拡張
 
@@ -102,12 +135,13 @@ export interface ProcessedActions {
   bundleActions: BundleAction[];
   textAction?: SlackAction;
   resultEvent?: any;
-  mainApiCallCount?: number;  // ← 削除可能（使わなくなる）
   lastMainUsage?: TokenUsage | null;  // ← 追加
+  // mainApiCallCount は削除（使わなくなる）
 }
 ```
 
 ## リスク
 
-- `assistant`イベントの`message.usage`が実際に存在しない場合 → フォールバックで`result.usage`を使う（現在の挙動に戻る）
-- サブエージェントの`assistant`イベントを拾ってしまう → `!parentToolUseId` でフィルタ済み
+- **`message.usage`が存在しない場合**: フォールバックで`result.usage`を使う。ただし`result.usage`は累計値のため、ツール多用時にctxが100%を超える可能性がある → `Math.min(contextUsed, contextWindow)` でキャップする
+- **サブエージェントのusageを拾う**: `!parentToolUseId` でフィルタ済み
+- **フォールバック時の表示**: フォールバック中は値が不正確であることを `~` プレフィックスで示す（例: `ctx ~512k/1M(51.2%)`）
