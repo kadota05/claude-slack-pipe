@@ -36,7 +36,7 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    <string>{{NODE_BIN_DIR}}:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
     <key>MANAGED_BY_LAUNCHD</key>
     <string>1</string>
   </dict>

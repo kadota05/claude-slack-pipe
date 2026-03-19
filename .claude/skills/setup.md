@@ -219,7 +219,7 @@ LOG_LEVEL=info
 
 1. テンプレートからplistを生成：
 ```bash
-NODE_PATH=$(realpath $(which node)) && PROJECT_DIR=$(pwd) && DATA_DIR="$HOME/.claude-slack-pipe" && mkdir -p ~/Library/LaunchAgents && sed -e "s|{{NODE_PATH}}|$NODE_PATH|g" -e "s|{{PROJECT_DIR}}|$PROJECT_DIR|g" -e "s|{{DATA_DIR}}|$DATA_DIR|g" launchd/com.user.claude-slack-pipe.plist.template > ~/Library/LaunchAgents/com.user.claude-slack-pipe.plist && echo "✅ plist generated"
+NODE_PATH=$(realpath $(which node)) && NODE_BIN_DIR=$(dirname "$NODE_PATH") && PROJECT_DIR=$(pwd) && DATA_DIR="$HOME/.claude-slack-pipe" && mkdir -p ~/Library/LaunchAgents && sed -e "s|{{NODE_PATH}}|$NODE_PATH|g" -e "s|{{NODE_BIN_DIR}}|$NODE_BIN_DIR|g" -e "s|{{PROJECT_DIR}}|$PROJECT_DIR|g" -e "s|{{DATA_DIR}}|$DATA_DIR|g" launchd/com.user.claude-slack-pipe.plist.template > ~/Library/LaunchAgents/com.user.claude-slack-pipe.plist && echo "✅ plist generated"
 ```
 
 2. launchdに登録して起動：

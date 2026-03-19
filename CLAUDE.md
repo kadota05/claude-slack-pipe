@@ -39,33 +39,11 @@
 
 `src/` 配下のコードを変更したら、必ずBridgeプロセスを再起動すること。
 
-### launchd管理下の場合（推奨）
+**⚠️ 絶対禁止: Claude CLI（あなた自身）からBridgeを再起動してはならない。** Bashツールで `kill`, `pkill`, `launchctl kickstart` 等を実行すると、自分自身（Bridge）を殺すことになり、Slack応答が途切れてフリーズする。再起動はユーザーに依頼すること。
 
-Slackで以下を送信するだけで再起動される（admin権限が必要）：
+ユーザーへの再起動依頼メッセージ:
+> コードを変更しました。Slackで `cc /restart-bridge` と送信して再起動してください。
 
-```
-cc /restart-bridge
-```
-
-またはターミナルから：
-```bash
-launchctl kickstart -k gui/$(id -u)/com.user.claude-slack-pipe
-```
-
-### 手動起動の場合（launchd未設定時）
-
-```bash
-# 実行中のBridgeを終了
-pkill -f 'tsx src/index.ts'
-# 少し待ってから再起動
-sleep 2 && caffeinate -i npx tsx src/index.ts
-```
-
-- **必ず `run_in_background: true` で起動すること。** Bashツールのtimeoutは最大10分のため、フォアグラウンドで起動するとプロセスが強制killされる。
-
-**重要:** Bashで `kill` コマンドを使ってBridgeプロセスを直接killしないこと。Bridge自身が処理中のSlack応答が途切れる原因になる。必ず `cc /restart-bridge` か `launchctl kickstart` を使うこと。
-
-- `caffeinate -i` によりアイドルスリープを防止する（AC電源・バッテリー両方で有効。リッドクローズ時のスリープは防げないため、別途 `sudo pmset -a disablesleep 1` が必要）
 - 起動後、ログに `Claude Code Slack Bridge is running` が出ることを確認する
 - **起動直後に `ENOENT` エラーで落ちた場合**: Claude CLIのバージョン不一致が原因の可能性が高い。`.claude/skills/fix-claude-cli-version.md` をReadツールで読み取り、その指示に従って対処すること
 

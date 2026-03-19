@@ -20,7 +20,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import type { PersistentSession } from './bridge/persistent-session.js';
-import { acquirePidLock } from './utils/pid-lock.js';
 import { StreamProcessor } from './streaming/stream-processor.js';
 import { SlackActionExecutor } from './streaming/slack-action-executor.js';
 import { buildToolModal, buildThinkingModal, buildSubagentModal, buildBundleDetailModal } from './slack/modal-builder.js';
@@ -99,12 +98,6 @@ async function main(): Promise<void> {
 
   // Ensure data directory exists
   fs.mkdirSync(config.dataDir, { recursive: true });
-
-  // Singleton lock — skip when managed by launchd
-  let pidLock: { release: () => void } | null = null;
-  if (!process.env.MANAGED_BY_LAUNCHD) {
-    pidLock = acquirePidLock(config.dataDir);
-  }
 
   const app = createApp(config);
 
@@ -217,11 +210,20 @@ async function main(): Promise<void> {
           });
           return;
         }
-        await app.client.chat.postMessage({
+        const restartMsg = await app.client.chat.postMessage({
           channel: channelId,
           thread_ts: threadTs,
           text: '🔄 Bridgeを再起動します...',
         });
+        // Save restart message info so new process can update it
+        const restartPendingFile = path.join(os.homedir(), '.claude-slack-pipe', 'restart-pending.json');
+        try {
+          fs.writeFileSync(restartPendingFile, JSON.stringify({
+            channel: channelId,
+            ts: restartMsg.ts,
+            thread_ts: threadTs,
+          }));
+        } catch { /* best-effort */ }
         await shutdown('restart-bridge');
         return;
       }
@@ -875,6 +877,22 @@ async function main(): Promise<void> {
   await startApp(app);
   logger.info('Claude Code Slack Bridge is running (Phase 2)');
 
+  // Update restart message if pending
+  const restartPendingFile = path.join(os.homedir(), '.claude-slack-pipe', 'restart-pending.json');
+  try {
+    if (fs.existsSync(restartPendingFile)) {
+      const pending = JSON.parse(fs.readFileSync(restartPendingFile, 'utf-8'));
+      fs.unlinkSync(restartPendingFile);
+      await app.client.chat.update({
+        channel: pending.channel,
+        ts: pending.ts,
+        text: '✅ Bridgeの再起動が完了しました',
+      });
+    }
+  } catch (err) {
+    logger.warn('Failed to update restart message', { error: (err as Error).message });
+  }
+
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info(`Received ${signal}, shutting down...`);
@@ -883,7 +901,6 @@ async function main(): Promise<void> {
       coordinator.endSession(entry.cliSessionId);
     }
     tunnelManager.stopAll();
-    pidLock?.release();
     // Clear crash history on intentional restart so it doesn't trigger circuit breaker
     if (signal === 'restart-bridge' && process.env.MANAGED_BY_LAUNCHD) {
       const crashFile = path.join(os.homedir(), '.claude-slack-pipe', 'crash-history.json');
