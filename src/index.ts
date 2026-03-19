@@ -529,6 +529,13 @@ async function main(): Promise<void> {
     }
 
     session.on('message', (event: any) => {
+      // Capture the active message ts NOW (synchronously), before the
+      // coordinator's stateChange handler can overwrite it via auto-dequeue.
+      // The result event triggers transition('idle') synchronously after
+      // emit('message'), so by the time the serialQueue handler runs,
+      // activeMessageTs may already point to the next queued message.
+      const capturedMsgTs = activeMessageTs.get(session.sessionId);
+
       serialQueue.enqueue(async () => {
         try {
           // 1. Process event — returns actions (async for tunnel URL rewriting)
@@ -587,9 +594,10 @@ async function main(): Promise<void> {
               ),
             });
 
-            const msgTs = activeMessageTs.get(session.sessionId) || threadTs;
+            // Use the ts captured at emit time — activeMessageTs may already
+            // point to the next queued message due to synchronous dequeue.
+            const msgTs = capturedMsgTs || threadTs;
             await rm.replaceWithDone(session.sessionId, channelId, msgTs);
-            activeMessageTs.delete(session.sessionId);
 
             indexStore.update(
               indexStore.findByThreadTs(threadTs)?.cliSessionId || '',
