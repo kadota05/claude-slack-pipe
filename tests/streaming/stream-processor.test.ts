@@ -399,3 +399,71 @@ describe('StreamProcessor - round-based text splitting', () => {
     expect(completion.textAction!.type).toBe('postMessage');
   });
 });
+
+describe('StreamProcessor - multi-round ordering (integration)', () => {
+  it('produces [bundle][text][bundle][text] for 2+ rounds', async () => {
+    const sp = new StreamProcessor({ channel: 'C1', threadTs: '1.0', sessionId: 's1' });
+
+    // Round 1: thinking → tool → text
+    await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'think1' }] } });
+    sp.registerBundleMessageTs('bundle-1', 'b1.ts');
+    await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/a' } }] } });
+    await sp.processEvent({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } });
+    const r1text = await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'text', text: 'Round 1 response' }] } });
+    expect(r1text.textAction?.type).toBe('postMessage');
+    sp.registerTextMessageTs('t1.ts');
+
+    // Round 2: thinking → tool → text (should be NEW postMessage)
+    await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'think2' }] } });
+    sp.registerBundleMessageTs('bundle-2', 'b2.ts');
+    await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'npm test' } }] } });
+    await sp.processEvent({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't2', content: 'pass' }] } });
+    const r2text = await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'text', text: 'Round 2 response' }] } });
+    // Critical: this must be postMessage (new message), NOT update
+    expect(r2text.textAction?.type).toBe('postMessage');
+  });
+});
+
+describe('StreamProcessor - parallel subagents (integration)', () => {
+  it('tracks both subagents and flushes text after all complete', async () => {
+    const sp = new StreamProcessor({ channel: 'C1', threadTs: '1.0', sessionId: 's1' });
+
+    // Start agent A and B
+    await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'agentA', name: 'Agent', input: { description: 'Explore' } }] } });
+    sp.registerBundleMessageTs('bundle-1', 'b1.ts');
+    await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'agentB', name: 'Agent', input: { description: 'Test' } }] } });
+
+    // Text while subagents running — should be buffered
+    const textDuring = await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'text', text: 'Working on it...' }] } });
+    expect(textDuring.textAction).toBeUndefined();
+
+    // Complete A — text still buffered (B still running)
+    const afterA = await sp.processEvent({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'agentA', content: 'agentId: abc123\ndone' }] } });
+    expect(afterA.textAction).toBeUndefined();
+
+    // Complete B — text should now flush
+    const afterB = await sp.processEvent({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'agentB', content: 'agentId: def456\ndone' }] } });
+    expect(afterB.textAction).toBeDefined();
+    expect(afterB.textAction!.type).toBe('postMessage');
+  });
+});
+
+describe('StreamProcessor - text-tool-text pattern (integration)', () => {
+  it('handles text → tool → text pattern with separate messages', async () => {
+    const sp = new StreamProcessor({ channel: 'C1', threadTs: '1.0', sessionId: 's1' });
+
+    // First text (no bundle before it)
+    const r1 = await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'text', text: 'Let me check.' }] } });
+    expect(r1.textAction?.type).toBe('postMessage');
+    sp.registerTextMessageTs('t1.ts');
+
+    // Tool starts — should reset text
+    await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/a' } }] } });
+    sp.registerBundleMessageTs('bundle-1', 'b1.ts');
+    await sp.processEvent({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'data' }] } });
+
+    // Second text — should be NEW postMessage
+    const r2 = await sp.processEvent({ type: 'assistant', message: { content: [{ type: 'text', text: 'Here are the results.' }] } });
+    expect(r2.textAction?.type).toBe('postMessage');
+  });
+});
