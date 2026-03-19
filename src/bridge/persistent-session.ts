@@ -26,6 +26,7 @@ export class PersistentSession extends EventEmitter {
   private _hasPendingInitialPrompt = false;
   private _interrupted = false;
   private _killedForModelChange = false;
+  private _controlRequestCounter = 0;
 
   constructor(params: SessionStartParams) {
     super();
@@ -50,6 +51,8 @@ export class PersistentSession extends EventEmitter {
     if (this._state !== 'not_started' && this._state !== 'dead') {
       throw new Error(`Cannot spawn in state: ${this._state}`);
     }
+    this._interrupted = false;
+    this._killedForModelChange = false;
     this.transition('starting');
 
     const executable = process.env.CLAUDE_EXECUTABLE || 'claude';
@@ -124,11 +127,11 @@ export class PersistentSession extends EventEmitter {
   }
 
   /**
-   * Interrupt the current turn by sending SIGINT to the CLI process.
-   * This mirrors pressing Escape/Ctrl+C in the interactive CLI.
+   * Interrupt the current turn using the official control_request protocol.
+   * Falls back to SIGTERM if the CLI doesn't respond within the grace period.
    */
   sendInterrupt(): void {
-    if (!this.process) {
+    if (!this.process || this.process.stdin!.destroyed) {
       logger.warn(`Cannot interrupt ${this.sessionId}: no active process`);
       return;
     }
@@ -137,8 +140,16 @@ export class PersistentSession extends EventEmitter {
       return;
     }
     this._interrupted = true;
-    logger.info(`[${this.sessionId}] Sending SIGINT to interrupt current turn`);
-    this.process.kill('SIGINT');
+    logger.info(`[${this.sessionId}] Sending control_request interrupt`);
+    this.sendControlRequest({ subtype: 'interrupt' });
+
+    // Fallback: kill process if control interrupt doesn't produce a result
+    this.killTimer = setTimeout(() => {
+      if (this._state === 'processing' && this.process) {
+        logger.warn(`[${this.sessionId}] Control interrupt timed out, sending SIGTERM`);
+        this.process.kill('SIGTERM');
+      }
+    }, KILL_GRACE_MS);
   }
 
   end(): void {
@@ -196,6 +207,22 @@ export class PersistentSession extends EventEmitter {
     }
   }
 
+  /**
+   * Send a control request using the official SDK protocol.
+   * Wraps the request in { type: 'control_request', request_id, request }.
+   */
+  private sendControlRequest(request: Record<string, unknown>): void {
+    if (!this.process || this.process.stdin!.destroyed) return;
+    this._controlRequestCounter++;
+    const requestId = `req_${this._controlRequestCounter}_${Math.random().toString(36).slice(2, 10)}`;
+    const controlRequest = {
+      type: 'control_request',
+      request_id: requestId,
+      request,
+    };
+    this.process.stdin!.write(JSON.stringify(controlRequest) + '\n');
+  }
+
   private handleStdout(chunk: Buffer): void {
     this.stdoutBuffer += chunk.toString();
     const lines = this.stdoutBuffer.split('\n');
@@ -214,6 +241,15 @@ export class PersistentSession extends EventEmitter {
 
   private handleEvent(event: StreamEvent): void {
     logger.info(`[${this.sessionId}] event: type=${event.type}, subtype=${event.subtype || 'none'}`);
+
+    // Suppress output events after user interrupt — process may still flush
+    // buffered output before stopping. Allow 'system' and 'result' through
+    // so init/idle transitions and killTimer cleanup still work.
+    if (this._interrupted && event.type !== 'system' && event.type !== 'result') {
+      logger.debug(`[${this.sessionId}] suppressing event during interrupt: ${event.type}`);
+      return;
+    }
+
     this.emit('message', event);
 
     if (event.type === 'system' && event.subtype === 'init') {
@@ -229,6 +265,13 @@ export class PersistentSession extends EventEmitter {
         this.startIdleTimer();
       }
     } else if (event.type === 'result') {
+      // Cancel SIGTERM fallback if control interrupt succeeded
+      if (this.killTimer) {
+        clearTimeout(this.killTimer);
+        this.killTimer = null;
+      }
+      // Reset interrupt flag so future crashes are correctly treated as unintentional
+      this._interrupted = false;
       this.transition('idle');
       this.startIdleTimer();
     }

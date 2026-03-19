@@ -474,6 +474,12 @@ async function main(): Promise<void> {
   // Track which user message is currently being processed per session
   const activeMessageTs = new Map<string, string>();
 
+  // When coordinator auto-dequeues a queued message, register its ts
+  // so that 🔴 reaction interrupt can find the matching session.
+  coordinator.onDequeueCallback = (sessionId, messageId) => {
+    activeMessageTs.set(sessionId, messageId);
+  };
+
   function wireSessionOutput(
     session: PersistentSession,
     channelId: string,

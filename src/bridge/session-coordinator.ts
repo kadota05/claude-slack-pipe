@@ -22,6 +22,7 @@ export class SessionCoordinator {
   private readonly globalQueue = new MessageQueue(10, 5 * 60 * 1000);
 
   onIdleCallback?: () => void;
+  onDequeueCallback?: (sessionId: string, messageId: string) => void;
 
   constructor(config: CoordinatorConfig) {
     this.config = config;
@@ -124,14 +125,16 @@ export class SessionCoordinator {
       if (to === 'idle' && !entry.sessionQueue.isEmpty) {
         const next = entry.sessionQueue.dequeue();
         if (next) {
+          this.onDequeueCallback?.(session.sessionId, next.id);
           session.sendPrompt(next.prompt);
         }
       }
 
       if (to === 'dead' && from === 'processing') {
         if (session.wasInterrupted) {
-          // User-initiated interrupt — don't auto-respawn
-          logger.info(`Session ${session.sessionId} interrupted by user, skipping auto-respawn`);
+          // User-initiated interrupt — respawn immediately so session is available again
+          logger.info(`Session ${session.sessionId} interrupted by user, respawning`);
+          session.spawn();
         } else {
           entry.crashCount++;
           if (entry.crashCount <= 3) {
