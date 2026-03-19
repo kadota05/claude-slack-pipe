@@ -80,6 +80,21 @@ async function main(): Promise<void> {
 
   const config = loadConfig();
 
+  // Simple log rotation for launchd stdout/stderr files
+  if (process.env.MANAGED_BY_LAUNCHD) {
+    const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10MB
+    for (const logFile of ['bridge.stdout.log', 'bridge.stderr.log']) {
+      const logPath = path.join(config.dataDir, logFile);
+      try {
+        const stat = fs.statSync(logPath);
+        if (stat.size > MAX_LOG_SIZE) {
+          fs.renameSync(logPath, logPath + '.old');
+          logger.info(`Rotated ${logFile} (${(stat.size / 1024 / 1024).toFixed(1)}MB)`);
+        }
+      } catch { /* file doesn't exist yet */ }
+    }
+  }
+
   // Ensure data directory exists
   fs.mkdirSync(config.dataDir, { recursive: true });
 
