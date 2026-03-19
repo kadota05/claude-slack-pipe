@@ -81,6 +81,10 @@ async function main(): Promise<void> {
 
   const config = loadConfig();
 
+  // Record startup time for gap message filtering
+  // Messages sent before this time (during process downtime) will be ignored.
+  const startedAt = Date.now() / 1000; // Slack ts format (seconds since epoch)
+
   // Simple log rotation for launchd stdout/stderr files
   if (process.env.MANAGED_BY_LAUNCHD) {
     const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10MB
@@ -148,6 +152,14 @@ async function main(): Promise<void> {
     logger.info('[DEBUG] handleMessage called', { type: event.type, channel_type: event.channel_type, bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 50), user: event.user, ts: event.ts, client_msg_id: event.client_msg_id });
     if (event.channel_type !== 'im') { logger.info('[DEBUG] skipped: not im'); return; }
     if (event.bot_id || event.subtype) { logger.info('[DEBUG] skipped: bot_id or subtype', { bot_id: event.bot_id, subtype: event.subtype }); return; }
+
+    // Drop messages sent before this process started (e.g. during WiFi outage, crash)
+    if (parseFloat(event.ts) < startedAt) {
+      logger.info('[Resilience] Dropping message from before process start', {
+        ts: event.ts, startedAt,
+      });
+      return;
+    }
 
     const userId = event.user;
     const channelId = event.channel;
