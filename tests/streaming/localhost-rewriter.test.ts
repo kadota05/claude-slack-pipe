@@ -93,7 +93,7 @@ describe('rewriteLocalUrls', () => {
       urlMap
     );
     expect(result).toBe(
-      'Server running at `http://localhost:3000`（<https://abc123.trycloudflare.com|Slackからはこちら>）'
+      'Server running at `localhost:3000` （ <https://abc123.trycloudflare.com|Slackからはこちら> ）'
     );
   });
 
@@ -106,8 +106,8 @@ describe('rewriteLocalUrls', () => {
       'Frontend: http://localhost:3000 API: http://localhost:8080',
       urlMap
     );
-    expect(result).toContain('`http://localhost:3000`（<https://aaa.trycloudflare.com|Slackからはこちら>）');
-    expect(result).toContain('`http://localhost:8080`（<https://bbb.trycloudflare.com|Slackからはこちら>）');
+    expect(result).toContain('`localhost:3000` （ <https://aaa.trycloudflare.com|Slackからはこちら> ）');
+    expect(result).toContain('`localhost:8080` （ <https://bbb.trycloudflare.com|Slackからはこちら> ）');
   });
 
   it('leaves URL unchanged when no tunnel URL available', () => {
@@ -127,6 +127,6 @@ describe('rewriteLocalUrls', () => {
       'Open http://localhost:5173/dashboard',
       urlMap
     );
-    expect(result).toContain('`http://localhost:5173/dashboard`（<https://abc123.trycloudflare.com/dashboard|Slackからはこちら>）');
+    expect(result).toContain('`localhost:5173/dashboard` （ <https://abc123.trycloudflare.com/dashboard|Slackからはこちら> ）');
   });
 });

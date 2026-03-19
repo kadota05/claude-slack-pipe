@@ -1,10 +1,11 @@
 // tests/streaming/slack-action-executor.test.ts
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { SlackActionExecutor } from '../../src/streaming/slack-action-executor.js';
 import type { SlackAction } from '../../src/streaming/types.js';
 
 function createMockClient() {
   return {
+    token: 'xoxb-test-token',
     chat: {
       postMessage: vi.fn().mockResolvedValue({ ok: true, ts: '1234.5678' }),
       update: vi.fn().mockResolvedValue({ ok: true, ts: '1234.5678' }),
@@ -29,38 +30,63 @@ function makeAction(overrides: Partial<SlackAction> = {}): SlackAction {
   };
 }
 
+// Mock fetch for postMessage/update (which now use fetch directly)
+const mockFetch = vi.fn();
+
 describe('SlackActionExecutor', () => {
   let executor: SlackActionExecutor;
   let client: ReturnType<typeof createMockClient>;
+  let originalFetch: typeof global.fetch;
 
   beforeEach(() => {
     client = createMockClient();
     executor = new SlackActionExecutor(client as any);
+    originalFetch = global.fetch;
+    global.fetch = mockFetch;
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      json: () => Promise.resolve({ ok: true, ts: '1234.5678' }),
+      headers: new Headers(),
+    });
   });
 
-  it('executes postMessage action', async () => {
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('executes postMessage action via JSON fetch', async () => {
     const action = makeAction({ type: 'postMessage' });
     const result = await executor.execute(action);
     expect(result.ok).toBe(true);
     expect(result.ts).toBe('1234.5678');
-    expect(client.chat.postMessage).toHaveBeenCalledWith({
-      channel: 'C123',
-      thread_ts: 'T123',
-      blocks: action.blocks,
-      text: 'test',
-    });
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://slack.com/api/chat.postMessage',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'Content-Type': 'application/json; charset=utf-8',
+        }),
+      })
+    );
+    // Verify JSON body contains correct fields
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.channel).toBe('C123');
+    expect(body.thread_ts).toBe('T123');
+    expect(body.blocks).toEqual(action.blocks);
   });
 
-  it('executes update action', async () => {
+  it('executes update action via JSON fetch', async () => {
     const action = makeAction({ type: 'update', messageTs: '1111.2222' });
     const result = await executor.execute(action);
     expect(result.ok).toBe(true);
-    expect(client.chat.update).toHaveBeenCalledWith({
-      channel: 'C123',
-      ts: '1111.2222',
-      blocks: action.blocks,
-      text: 'test',
-    });
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://slack.com/api/chat.update',
+      expect.any(Object)
+    );
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.channel).toBe('C123');
+    expect(body.ts).toBe('1111.2222');
   });
 
   it('executes addReaction action', async () => {
@@ -79,7 +105,10 @@ describe('SlackActionExecutor', () => {
   });
 
   it('handles API errors gracefully', async () => {
-    client.chat.postMessage.mockRejectedValue(new Error('channel_not_found'));
+    mockFetch.mockResolvedValue({
+      json: () => Promise.resolve({ ok: false, error: 'channel_not_found' }),
+      headers: new Headers(),
+    });
     const action = makeAction();
     const result = await executor.execute(action);
     expect(result.ok).toBe(false);
@@ -87,11 +116,10 @@ describe('SlackActionExecutor', () => {
   });
 
   it('detects 429 and records rate limit', async () => {
-    const error = new Error('ratelimited') as any;
-    error.data = { headers: { 'retry-after': '5' } };
-    error.code = 'slack_webapi_rate_limited';
-    client.chat.postMessage.mockRejectedValue(error);
-
+    mockFetch.mockResolvedValue({
+      json: () => Promise.resolve({ ok: false, error: 'ratelimited' }),
+      headers: new Headers({ 'retry-after': '5' }),
+    });
     const action = makeAction();
     const result = await executor.execute(action);
     expect(result.ok).toBe(false);
@@ -109,7 +137,7 @@ describe('SlackActionExecutor', () => {
     const result = await executor.execute(action);
     expect(result.ok).toBe(false);
     expect(result.error).toBe('degraded_skip');
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it('allows P1 actions even at high rate limit', async () => {

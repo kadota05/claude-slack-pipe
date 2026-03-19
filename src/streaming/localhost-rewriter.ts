@@ -1,7 +1,8 @@
 // src/streaming/localhost-rewriter.ts
 
+// Matches local URLs, stopping at whitespace, parens, and Slack mrkdwn special chars (<, >, |)
 const LOCALHOST_URL_PATTERN =
-  /https?:\/\/(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|0\.0\.0\.0|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?[^\s)]*/g;
+  /https?:\/\/(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|0\.0\.0\.0|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?[^\s)<>|]*/g;
 
 export interface LocalUrl {
   url: string;
@@ -57,10 +58,20 @@ export function rewriteLocalUrls(
 
   let result = text;
   for (const [originalUrl, tunnelUrl] of sortedEntries) {
-    // Replace all occurrences
-    result = result.replaceAll(
-      originalUrl,
-      `\`${originalUrl}\`（<${tunnelUrl}|Slackからはこちら>）`
+    const escaped = originalUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // First: replace Slack mrkdwn links <localUrl|text> with <tunnelUrl|text>
+    result = result.replace(
+      new RegExp(`<${escaped}\\|([^>]+)>`, 'g'),
+      `<${tunnelUrl}|$1>`
+    );
+
+    // Then: replace bare occurrences (not inside mrkdwn links)
+    // Strip protocol to avoid Slack's auto-linking which breaks <url|text> mrkdwn links
+    const displayUrl = originalUrl.replace(/^https?:\/\//, '');
+    result = result.replace(
+      new RegExp(`(?<![<|])${escaped}`, 'g'),
+      `\`${displayUrl}\` （ <${tunnelUrl}|Slackからはこちら> ）`
     );
   }
 

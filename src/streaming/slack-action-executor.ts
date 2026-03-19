@@ -43,7 +43,9 @@ export class SlackActionExecutor {
   private async callApi(action: SlackAction): Promise<ExecutorResult> {
     switch (action.type) {
       case 'postMessage': {
-        const resp = await this.client.chat.postMessage({
+        // Use fetch with JSON to avoid @slack/web-api's form-urlencoded encoding
+        // which breaks Slack mrkdwn link syntax <url|text>
+        const resp = await this.slackApiJson('chat.postMessage', {
           channel: action.channel,
           thread_ts: action.threadTs,
           blocks: action.blocks,
@@ -52,7 +54,7 @@ export class SlackActionExecutor {
         return { ok: true, ts: resp.ts };
       }
       case 'update': {
-        const resp = await this.client.chat.update({
+        const resp = await this.slackApiJson('chat.update', {
           channel: action.channel,
           ts: action.messageTs,
           blocks: action.blocks,
@@ -77,6 +79,28 @@ export class SlackActionExecutor {
         return { ok: true };
       }
     }
+  }
+
+  private async slackApiJson(method: string, body: Record<string, unknown>): Promise<any> {
+    const token = this.client.token;
+    logger.info(`[slackApiJson] ${method} token=${token ? 'present' : 'MISSING'} body=${JSON.stringify(body).substring(0, 500)}`);
+    const resp = await fetch(`https://slack.com/api/${method}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json; charset=utf-8',
+      },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    logger.info(`[slackApiJson] ${method} response ok=${data.ok} error=${data.error || 'none'}`);
+    if (!data.ok) {
+      const err = new Error(`Slack API error: ${data.error}`);
+      (err as any).code = data.error === 'ratelimited' ? 'slack_webapi_rate_limited' : data.error;
+      (err as any).data = { headers: Object.fromEntries(resp.headers.entries()) };
+      throw err;
+    }
+    return data;
   }
 
   private handleError(err: unknown, method: SlackApiMethod): ExecutorResult {
