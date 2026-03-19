@@ -46,7 +46,7 @@ export class NetworkWatcher extends EventEmitter {
 
     this.proc.stdout!.on('data', (data: Buffer) => {
       const text = data.toString();
-      if (text.includes('changed key')) {
+      if (text.includes('changedKey')) {
         this.onNetworkChange();
       }
     });
