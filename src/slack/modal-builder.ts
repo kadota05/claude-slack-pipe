@@ -183,7 +183,7 @@ export function buildSubagentModal(
   };
 }
 
-export function buildBundleDetailModal(entries: BundleEntry[], sessionId: string, bundleIndex: number): any {
+export function buildBundleDetailModal(entries: BundleEntry[], sessionId: string, bundleKey: string): any {
   const blocks: Block[] = [];
   const buttons: Block[] = [];
   let thinkingIndex = 0;
@@ -194,7 +194,7 @@ export function buildBundleDetailModal(entries: BundleEntry[], sessionId: string
       buttons.push({
         type: 'button',
         text: { type: 'plain_text', text: truncate(`💭 ${preview}`, 72) },
-        action_id: `view_thinking_detail:${sessionId}:${bundleIndex}:${thinkingIndex}`,
+        action_id: `view_thinking_detail:${sessionId}:${bundleKey}:${thinkingIndex}`,
       });
       thinkingIndex++;
     } else if (entry.type === 'tool') {

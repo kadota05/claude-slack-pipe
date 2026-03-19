@@ -212,3 +212,80 @@ describe('SessionJsonlReader bundle boundary', () => {
     fs.rmSync(tmpDir2, { recursive: true, force: true });
   });
 });
+
+describe('SessionJsonlReader.readBundleByKey', () => {
+  let reader: SessionJsonlReader;
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonl-key-test-'));
+    reader = new SessionJsonlReader(tmpDir);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  function writeJsonl(projectPath: string, sessionId: string, lines: any[]) {
+    const dirName = projectPath.replace(/\//g, '-');
+    const dir = path.join(tmpDir, dirName);
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, `${sessionId}.jsonl`);
+    const content = lines.map(l => JSON.stringify(l)).join('\n');
+    fs.writeFileSync(filePath, content);
+  }
+
+  it('finds bundle by tool_use_id key', async () => {
+    writeJsonl('/test/project', 'sess-1', [
+      { message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'thought1' }] } },
+      { message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_AAA', name: 'Read', input: { file_path: '/a.ts' } }] } },
+      { message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_AAA', content: 'file content' }] } },
+      { message: { role: 'assistant', content: [{ type: 'text', text: 'response 1' }] } },
+      { message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_BBB', name: 'Grep', input: { pattern: 'foo' } }] } },
+      { message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_BBB', content: 'matches' }] } },
+      { message: { role: 'assistant', content: [{ type: 'text', text: 'response 2' }] } },
+    ]);
+
+    // Key = toolu_AAA should find bundle 0 (first bundle)
+    const entries0 = await reader.readBundleByKey('/test/project', 'sess-1', 'toolu_AAA');
+    expect(entries0).toHaveLength(2); // thinking + tool
+    expect(entries0[0].type).toBe('thinking');
+    expect(entries0[1].type).toBe('tool');
+    expect((entries0[1] as any).toolName).toBe('Read');
+
+    // Key = toolu_BBB should find bundle 1 (second bundle)
+    const entries1 = await reader.readBundleByKey('/test/project', 'sess-1', 'toolu_BBB');
+    expect(entries1).toHaveLength(1);
+    expect(entries1[0].type).toBe('tool');
+    expect((entries1[0] as any).toolName).toBe('Grep');
+  });
+
+  it('finds bundle by thinking hash key', async () => {
+    const { createHash } = await import('node:crypto');
+    const thinkingText = 'unique thinking text here';
+    const hash = createHash('sha256').update(thinkingText).digest('hex').slice(0, 12);
+
+    writeJsonl('/test/project', 'sess-1', [
+      { message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_AAA', name: 'Read', input: { file_path: '/a.ts' } }] } },
+      { message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_AAA', content: 'ok' }] } },
+      { message: { role: 'assistant', content: [{ type: 'text', text: 'response 1' }] } },
+      { message: { role: 'assistant', content: [{ type: 'thinking', thinking: thinkingText }] } },
+      { message: { role: 'assistant', content: [{ type: 'text', text: 'response 2' }] } },
+    ]);
+
+    const entries = await reader.readBundleByKey('/test/project', 'sess-1', `th_${hash}`);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].type).toBe('thinking');
+    expect((entries[0] as any).texts).toEqual([thinkingText]);
+  });
+
+  it('returns empty array for unknown key', async () => {
+    writeJsonl('/test/project', 'sess-1', [
+      { message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_AAA', name: 'Read', input: { file_path: '/a.ts' } }] } },
+      { message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } },
+    ]);
+
+    const entries = await reader.readBundleByKey('/test/project', 'sess-1', 'toolu_NONEXIST');
+    expect(entries).toHaveLength(0);
+  });
+});

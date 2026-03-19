@@ -267,7 +267,7 @@ describe('buildBundleCollapsedBlocks', () => {
     expect(contextText).toContain('🤖×1');
   });
 
-  it('includes view_bundle action_id with sessionId and bundleIndex', () => {
+  it('includes view_bundle action_id with sessionId and bundleKey', () => {
     const blocks = buildBundleCollapsedBlocks({
       thinkingCount: 1,
       toolCount: 0,
@@ -276,8 +276,9 @@ describe('buildBundleCollapsedBlocks', () => {
       subagentDurationMs: 0,
       sessionId: 'abc-123',
       bundleIndex: 2,
+      bundleKey: 'toolu_ABC',
     });
     const actionsBlock = blocks.find((b: any) => b.type === 'actions') as any;
-    expect(actionsBlock.elements[0].action_id).toBe('view_bundle:abc-123:2');
+    expect(actionsBlock.elements[0].action_id).toBe('view_bundle:abc-123:toolu_ABC');
   });
 });

@@ -1,4 +1,5 @@
 // src/streaming/group-tracker.ts
+import { createHash } from 'node:crypto';
 import {
   buildThinkingLiveBlocks,
   buildToolGroupLiveBlocks,
@@ -383,6 +384,29 @@ export class GroupTracker {
     this.activeBundle.completedGroups.push(cg);
   }
 
+  private extractBundleKey(completedGroups: CompletedGroup[]): string {
+    // Try first tool_use_id from tool groups
+    for (const cg of completedGroups) {
+      if (cg.category === 'tool' && cg.tools && cg.tools.length > 0) {
+        return cg.tools[0].toolUseId;
+      }
+      if (cg.category === 'subagent' && cg.agentSteps && cg.agentSteps.length > 0) {
+        return cg.agentSteps[0].toolUseId;
+      }
+    }
+
+    // Fallback: hash of first thinking text
+    for (const cg of completedGroups) {
+      if (cg.category === 'thinking' && cg.thinkingTexts && cg.thinkingTexts.length > 0) {
+        const hash = createHash('sha256').update(cg.thinkingTexts[0]).digest('hex').slice(0, 12);
+        return `th_${hash}`;
+      }
+    }
+
+    // Last resort
+    return `fallback_${Date.now()}`;
+  }
+
   private collapseActiveBundle(sessionId: string): BundleAction[] {
     const bundle = this.activeBundle;
     if (!bundle) return [];
@@ -401,6 +425,8 @@ export class GroupTracker {
       }
     }
 
+    const bundleKey = this.extractBundleKey(bundle.completedGroups);
+
     const blocks = buildBundleCollapsedBlocks({
       thinkingCount,
       toolCount,
@@ -409,6 +435,7 @@ export class GroupTracker {
       subagentDurationMs,
       sessionId,
       bundleIndex: bundle.index,
+      bundleKey,
     });
 
     const actions: BundleAction[] = [];
@@ -418,6 +445,7 @@ export class GroupTracker {
         type: 'collapse',
         bundleId: bundle.id,
         bundleIndex: bundle.index,
+        bundleKey,
         messageTs: bundle.messageTs,
         blocks,
         text: notifyText.update.collapsed({

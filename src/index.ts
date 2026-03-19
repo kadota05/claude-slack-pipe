@@ -807,8 +807,8 @@ async function main(): Promise<void> {
     const actionId = body.actions?.[0]?.action_id || '';
     const parts = actionId.split(':');
     const sessionId = parts[1];
-    const bundleIndex = parseInt(parts[2], 10);
-    if (!sessionId || isNaN(bundleIndex)) return;
+    const bundleKeyOrIndex = parts.slice(2).join(':');
+    if (!sessionId || !bundleKeyOrIndex) return;
 
     const entry = sessionIndexStore.findBySessionId(sessionId);
     if (!entry) {
@@ -816,18 +816,18 @@ async function main(): Promise<void> {
       return;
     }
 
-    const entries = await sessionJsonlReader.readBundle(
-      entry.projectPath,
-      sessionId,
-      bundleIndex,
-    );
+    // Legacy format: pure numeric = bundleIndex
+    const isLegacyIndex = /^\d+$/.test(bundleKeyOrIndex);
+    const entries = isLegacyIndex
+      ? await sessionJsonlReader.readBundle(entry.projectPath, sessionId, parseInt(bundleKeyOrIndex, 10))
+      : await sessionJsonlReader.readBundleByKey(entry.projectPath, sessionId, bundleKeyOrIndex);
 
     if (entries.length === 0) {
-      logger.warn(`No bundle entries for ${sessionId}:${bundleIndex}`);
+      logger.warn(`No bundle entries for ${sessionId}:${bundleKeyOrIndex}`);
       return;
     }
 
-    const modal = buildBundleDetailModal(entries, sessionId, bundleIndex);
+    const modal = buildBundleDetailModal(entries, sessionId, bundleKeyOrIndex);
     const threadTs = body.message?.thread_ts || body.message?.ts || '';
     modal.private_metadata = threadTs;
 
@@ -843,20 +843,20 @@ async function main(): Promise<void> {
     const actionId = body.actions?.[0]?.action_id || '';
     const parts = actionId.split(':');
     const sessionId = parts[1];
-    const bundleIndex = parseInt(parts[2], 10);
-    const thinkingIndex = parseInt(parts[3], 10);
-    if (!sessionId || isNaN(bundleIndex) || isNaN(thinkingIndex)) return;
+    // thinkingIndex is always the LAST part
+    const thinkingIndex = parseInt(parts[parts.length - 1], 10);
+    // bundleKeyOrIndex is everything between sessionId and thinkingIndex
+    const bundleKeyOrIndex = parts.slice(2, -1).join(':');
+    if (!sessionId || !bundleKeyOrIndex || isNaN(thinkingIndex)) return;
 
     const entry = sessionIndexStore.findBySessionId(sessionId);
     if (!entry) return;
 
-    const bundleEntries = await sessionJsonlReader.readBundle(
-      entry.projectPath,
-      sessionId,
-      bundleIndex,
-    );
+    const isLegacyIndex = /^\d+$/.test(bundleKeyOrIndex);
+    const bundleEntries = isLegacyIndex
+      ? await sessionJsonlReader.readBundle(entry.projectPath, sessionId, parseInt(bundleKeyOrIndex, 10))
+      : await sessionJsonlReader.readBundleByKey(entry.projectPath, sessionId, bundleKeyOrIndex);
 
-    // Filter thinking entries and pick by index
     const thinkingEntries = bundleEntries.filter(e => e.type === 'thinking');
     const target = thinkingEntries[thinkingIndex];
     if (!target || target.type !== 'thinking') return;

@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
+import { createHash } from 'node:crypto';
 import { logger } from '../utils/logger.js';
 import { getToolOneLiner } from './tool-formatter.js';
 
@@ -59,6 +60,32 @@ export class SessionJsonlReader {
       return await this.collectBundleEntries(filePath, bundleIndex);
     } catch (err) {
       logger.error('Failed to read session JSONL for bundle', { error: (err as Error).message, filePath });
+      return [];
+    }
+  }
+
+  async readBundleByKey(
+    projectPath: string,
+    sessionId: string,
+    bundleKey: string,
+  ): Promise<BundleEntry[]> {
+    const dirName = this.toProjectDirName(projectPath);
+    const filePath = path.join(this.claudeProjectsDir, dirName, `${sessionId}.jsonl`);
+
+    if (!fs.existsSync(filePath)) {
+      logger.warn(`Session JSONL not found: ${filePath}`);
+      return [];
+    }
+
+    try {
+      const bundleIndex = await this.findBundleIndexByKey(filePath, bundleKey);
+      if (bundleIndex === -1) {
+        logger.warn(`Bundle key not found: ${bundleKey}`);
+        return [];
+      }
+      return await this.collectBundleEntries(filePath, bundleIndex);
+    } catch (err) {
+      logger.error('Failed to read bundle by key', { error: (err as Error).message, filePath });
       return [];
     }
   }
@@ -180,6 +207,78 @@ export class SessionJsonlReader {
     }
 
     return entries;
+  }
+
+  private async findBundleIndexByKey(filePath: string, bundleKey: string): Promise<number> {
+    const stream = fs.createReadStream(filePath);
+    const rl = readline.createInterface({ input: stream });
+
+    const isThinkingKey = bundleKey.startsWith('th_');
+    const targetHash = isThinkingKey ? bundleKey.slice(3) : null;
+
+    let textBlockCount = 0;
+    let hasActivityInCurrentSegment = false;
+
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+
+      let entry: any;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      const msg = entry.message;
+      if (!msg || !Array.isArray(msg.content)) continue;
+
+      // Skip child events (subagent inner messages)
+      const isChild = typeof entry.parentToolUseID === 'string'
+        || typeof entry.parent_tool_use_id === 'string';
+      if (isChild) continue;
+
+      const role = msg.role;
+
+      for (const block of msg.content) {
+        if (!block || typeof block !== 'object') continue;
+
+        const currentBundleIndex = textBlockCount;
+
+        if (block.type === 'text' && role === 'assistant') {
+          if (hasActivityInCurrentSegment) {
+            textBlockCount++;
+            hasActivityInCurrentSegment = false;
+          }
+          continue;
+        }
+
+        if (block.type === 'thinking' || block.type === 'tool_use') {
+          hasActivityInCurrentSegment = true;
+        }
+
+        // Check for tool_use_id match
+        if (block.type === 'tool_use' && !isThinkingKey) {
+          if (String(block.id || '') === bundleKey) {
+            rl.close();
+            stream.destroy();
+            return currentBundleIndex;
+          }
+        }
+
+        // Check for thinking hash match
+        if (block.type === 'thinking' && isThinkingKey && targetHash) {
+          const text = String(block.thinking || '');
+          const hash = createHash('sha256').update(text).digest('hex').slice(0, 12);
+          if (hash === targetHash) {
+            rl.close();
+            stream.destroy();
+            return currentBundleIndex;
+          }
+        }
+      }
+    }
+
+    return -1;
   }
 
   private async findToolInFile(filePath: string, toolUseId: string): Promise<ToolDetail | null> {

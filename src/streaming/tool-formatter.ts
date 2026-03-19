@@ -282,6 +282,7 @@ interface BundleCollapsedConfig {
   subagentDurationMs: number;
   sessionId: string;
   bundleIndex: number;
+  bundleKey: string;
 }
 
 export function buildBundleCollapsedBlocks(config: BundleCollapsedConfig): Block[] {
@@ -310,7 +311,7 @@ export function buildBundleCollapsedBlocks(config: BundleCollapsedConfig): Block
       elements: [{
         type: 'button',
         text: { type: 'plain_text', text: '詳細を見る' },
-        action_id: `view_bundle:${config.sessionId}:${config.bundleIndex}`,
+        action_id: `view_bundle:${config.sessionId}:${config.bundleKey}`,
       }],
     },
   ];
