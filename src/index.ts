@@ -27,6 +27,7 @@ import type { BundleAction } from './streaming/types.js';
 import { SerialActionQueue } from './streaming/serial-action-queue.js';
 import { SessionJsonlReader } from './streaming/session-jsonl-reader.js';
 import { SubagentJsonlReader } from './streaming/subagent-jsonl-reader.js';
+import { notifyText } from './streaming/notification-text.js';
 import { RecentSessionScanner } from './store/recent-session-scanner.js';
 import { TunnelManager } from './streaming/tunnel-manager.js';
 import { NetworkWatcher } from './utils/network-watcher.js';
@@ -566,7 +567,11 @@ async function main(): Promise<void> {
               channel: channelId,
               thread_ts: threadTs,
               blocks: footerBlocks,
-              text: 'Complete',
+              text: notifyText.footer(
+                sessionModel || 'unknown',
+                (usage.input_tokens || 0) + (usage.output_tokens || 0),
+                resultEvent.duration_ms || 0,
+              ),
             });
 
             const msgTs = activeMessageTs.get(session.sessionId) || threadTs;
