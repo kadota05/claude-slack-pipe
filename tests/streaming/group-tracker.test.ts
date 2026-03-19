@@ -205,4 +205,40 @@ describe('GroupTracker with ActionBundle', () => {
       expect(update!.messageTs).toBe('MSG_TS');
     });
   });
+
+  describe('parallel subagents', () => {
+    it('tracks two subagents simultaneously in the same bundle', () => {
+      const actionsA = tracker.handleSubagentStart('agent-A', 'Explore codebase');
+      expect(actionsA.length).toBeGreaterThan(0);
+      expect(actionsA[0].type).toBe('postMessage');
+
+      const actionsB = tracker.handleSubagentStart('agent-B', 'Run tests');
+      const stepA = tracker.handleSubagentStep('agent-A', 'Read', 'tool-1', 'src/index.ts');
+      const stepB = tracker.handleSubagentStep('agent-B', 'Bash', 'tool-2', 'npm test');
+      expect(stepA).toBeDefined();
+      expect(stepB).toBeDefined();
+    });
+
+    it('completes subagents independently', () => {
+      tracker.handleSubagentStart('agent-A', 'Explore');
+      tracker.handleSubagentStart('agent-B', 'Test');
+      tracker.handleSubagentComplete('agent-A', 'done', 0);
+      const stepB = tracker.handleSubagentStep('agent-B', 'Bash', 'tool-3', 'npm test');
+      expect(stepB).toBeDefined();
+    });
+
+    it('allows collapse only when all subagents are done', () => {
+      const a1 = tracker.handleSubagentStart('agent-A', 'Explore');
+      tracker.registerBundleMessageTs(a1[0].bundleId, 'MSG_TS');
+      tracker.handleSubagentStart('agent-B', 'Test');
+
+      tracker.handleSubagentComplete('agent-A', 'done', 0);
+      const actions1 = tracker.handleTextStart('session-1');
+      expect(actions1.find(a => a.type === 'collapse')).toBeUndefined();
+
+      tracker.handleSubagentComplete('agent-B', 'done', 0);
+      const actions2 = tracker.handleTextStart('session-1');
+      expect(actions2.find(a => a.type === 'collapse')).toBeDefined();
+    });
+  });
 });

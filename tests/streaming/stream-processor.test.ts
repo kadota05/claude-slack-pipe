@@ -152,10 +152,10 @@ describe('StreamProcessor child event filtering', () => {
     const collapseActions = r2.bundleActions.filter(a => a.type === 'collapse');
     expect(collapseActions).toHaveLength(0);
 
-    // 3. Active group should still be subagent (not thinking)
+    // 3. Subagent should still be tracked (in activeSubagents Map, not activeGroup)
+    //    activeGroup should be null (child thinking must NOT create a thinking group)
     const activeGroup = sp.getActiveGroupData();
-    expect(activeGroup).not.toBeNull();
-    expect(activeGroup!.category).toBe('subagent');
+    expect(activeGroup).toBeNull();
   });
 });
 

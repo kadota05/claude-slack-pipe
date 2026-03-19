@@ -26,6 +26,7 @@ interface ActiveBundle {
 export class GroupTracker {
   private activeBundle: ActiveBundle | null = null;
   private activeGroup: ActiveGroup | null = null;
+  private activeSubagents: Map<string, ActiveGroup> = new Map();
   private bundleCounter = 0;
 
   handleThinking(text: string): BundleAction[] {
@@ -147,25 +148,27 @@ export class GroupTracker {
 
     const isNewBundle = this.ensureBundle(actions);
 
-    // Switch category — move active group to completed
+    // Move active group (thinking/tool) to completed if present
     if (this.activeGroup) {
       this.moveActiveGroupToCompleted();
       this.activeGroup = null;
     }
 
-    this.activeGroup = this.createActiveGroup('subagent');
-    this.activeGroup.agentToolUseId = toolUseId;
-    this.activeGroup.agentDescription = description;
+    // Store in Map instead of activeGroup
+    const group = this.createActiveGroup('subagent');
+    group.agentToolUseId = toolUseId;
+    group.agentDescription = description;
+    this.activeSubagents.set(toolUseId, group);
 
     if (isNewBundle) {
       const postAction = actions.find(a => a.type === 'postMessage');
       if (postAction) {
-        postAction.blocks = buildSubagentLiveBlocks(description, []);
+        postAction.blocks = this.buildLiveBundleBlocks();
         postAction.text = `SubAgent: ${description}`;
       }
     } else if (this.activeBundle!.messageTs) {
       actions.push(this.buildUpdateAction(
-        buildSubagentLiveBlocks(description, []),
+        this.buildLiveBundleBlocks(),
         `SubAgent: ${description}`,
       ));
     }
@@ -176,16 +179,16 @@ export class GroupTracker {
   handleSubagentStep(agentToolUseId: string, toolName: string, toolUseId: string, oneLiner: string): BundleAction[] {
     const actions: BundleAction[] = [];
 
-    if (!this.activeGroup || this.activeGroup.category !== 'subagent') return actions;
-    if (this.activeGroup.agentToolUseId !== agentToolUseId) return actions;
+    const agent = this.activeSubagents.get(agentToolUseId);
+    if (!agent) return actions;
 
-    this.activeGroup.agentSteps.push({ toolName, toolUseId, oneLiner, status: 'running' });
+    agent.agentSteps.push({ toolName, toolUseId, oneLiner, status: 'running' });
 
-    if (this.activeBundle?.messageTs && this.shouldEmitUpdate()) {
-      this.activeGroup.lastUpdateTime = Date.now();
+    if (this.activeBundle?.messageTs && this.shouldEmitUpdateForGroup(agent)) {
+      agent.lastUpdateTime = Date.now();
       actions.push(this.buildUpdateAction(
-        buildSubagentLiveBlocks(this.activeGroup.agentDescription || '', this.activeGroup.agentSteps),
-        `SubAgent: ${this.activeGroup.agentDescription}`,
+        this.buildLiveBundleBlocks(),
+        `SubAgent: ${agent.agentDescription}`,
       ));
     }
 
@@ -195,19 +198,19 @@ export class GroupTracker {
   handleSubagentStepResult(agentToolUseId: string, toolUseId: string, isError: boolean): BundleAction[] {
     const actions: BundleAction[] = [];
 
-    if (!this.activeGroup || this.activeGroup.category !== 'subagent') return actions;
-    if (this.activeGroup.agentToolUseId !== agentToolUseId) return actions;
+    const agent = this.activeSubagents.get(agentToolUseId);
+    if (!agent) return actions;
 
-    const step = this.activeGroup.agentSteps.find(s => s.toolUseId === toolUseId);
+    const step = agent.agentSteps.find(s => s.toolUseId === toolUseId);
     if (step) {
       step.status = isError ? 'error' : 'completed';
     }
 
-    if (this.activeBundle?.messageTs && this.shouldEmitUpdate()) {
-      this.activeGroup.lastUpdateTime = Date.now();
+    if (this.activeBundle?.messageTs && this.shouldEmitUpdateForGroup(agent)) {
+      agent.lastUpdateTime = Date.now();
       actions.push(this.buildUpdateAction(
-        buildSubagentLiveBlocks(this.activeGroup.agentDescription || '', this.activeGroup.agentSteps),
-        `SubAgent: ${this.activeGroup.agentDescription}`,
+        this.buildLiveBundleBlocks(),
+        `SubAgent: ${agent.agentDescription}`,
       ));
     }
 
@@ -215,18 +218,28 @@ export class GroupTracker {
   }
 
   handleSubagentComplete(agentToolUseId: string, _result: string, _durationMs: number): BundleAction[] {
-    if (!this.activeGroup || this.activeGroup.category !== 'subagent') return [];
-    if (this.activeGroup.agentToolUseId !== agentToolUseId) return [];
+    const agent = this.activeSubagents.get(agentToolUseId);
+    if (!agent) return [];
 
-    // Move subagent group to completed, but do NOT collapse the bundle
-    this.moveActiveGroupToCompleted();
-    this.activeGroup = null;
+    // Move to completedGroups and remove from Map
+    const cg: CompletedGroup = {
+      category: 'subagent',
+      agentDescription: agent.agentDescription,
+      agentId: agent.agentId,
+      agentSteps: [...agent.agentSteps],
+      duration: Date.now() - agent.startTime,
+    };
+    this.activeBundle!.completedGroups.push(cg);
+    this.activeSubagents.delete(agentToolUseId);
 
     return [];
   }
 
   handleTextStart(sessionId: string): BundleAction[] {
     if (!this.activeBundle) return [];
+
+    // Do not collapse while subagents are still running
+    if (this.activeSubagents.size > 0) return [];
 
     // Move active group to completed
     if (this.activeGroup) {
@@ -240,7 +253,7 @@ export class GroupTracker {
   flushActiveBundle(sessionId: string): BundleAction[] {
     if (!this.activeBundle) return [];
 
-    // Mark running items as error
+    // Mark running items as error in activeGroup
     if (this.activeGroup) {
       if (this.activeGroup.category === 'tool') {
         for (const tool of this.activeGroup.tools) {
@@ -256,6 +269,22 @@ export class GroupTracker {
       this.activeGroup = null;
     }
 
+    // Mark running items as error in activeSubagents and move to completed
+    for (const [toolUseId, agent] of this.activeSubagents) {
+      for (const step of agent.agentSteps) {
+        if (step.status === 'running') step.status = 'error';
+      }
+      const cg: CompletedGroup = {
+        category: 'subagent',
+        agentDescription: agent.agentDescription,
+        agentId: agent.agentId,
+        agentSteps: [...agent.agentSteps],
+        duration: Date.now() - agent.startTime,
+      };
+      this.activeBundle!.completedGroups.push(cg);
+    }
+    this.activeSubagents.clear();
+
     return this.collapseActiveBundle(sessionId);
   }
 
@@ -265,7 +294,14 @@ export class GroupTracker {
     }
   }
 
-  setAgentId(agentId: string): void {
+  setAgentId(agentId: string, agentToolUseId?: string): void {
+    if (agentToolUseId) {
+      const agent = this.activeSubagents.get(agentToolUseId);
+      if (agent) {
+        agent.agentId = agentId;
+        return;
+      }
+    }
     if (this.activeGroup) {
       this.activeGroup.agentId = agentId;
     }
@@ -273,6 +309,18 @@ export class GroupTracker {
 
   getActiveGroupData(): ActiveGroup | null {
     return this.activeGroup;
+  }
+
+  getActiveSubagent(toolUseId: string): ActiveGroup | undefined {
+    return this.activeSubagents.get(toolUseId);
+  }
+
+  hasActiveSubagents(): boolean {
+    return this.activeSubagents.size > 0;
+  }
+
+  canCollapse(): boolean {
+    return this.activeSubagents.size === 0;
   }
 
   // --- Private helpers ---
@@ -382,6 +430,42 @@ export class GroupTracker {
     return actions;
   }
 
+  private buildLiveBundleBlocks(): Block[] {
+    const blocks: Block[] = [];
+
+    // Completed groups first
+    for (const cg of this.activeBundle!.completedGroups) {
+      blocks.push(...this.buildCompletedGroupBlocks(cg));
+    }
+
+    // Active group (thinking/tool)
+    if (this.activeGroup) {
+      if (this.activeGroup.category === 'thinking') {
+        blocks.push(...buildThinkingLiveBlocks(this.activeGroup.thinkingTexts));
+      } else if (this.activeGroup.category === 'tool') {
+        blocks.push(...buildToolGroupLiveBlocks(this.activeGroup.tools));
+      }
+    }
+
+    // All active subagents
+    for (const [, agent] of this.activeSubagents) {
+      blocks.push(...buildSubagentLiveBlocks(agent.agentDescription || '', agent.agentSteps));
+    }
+
+    return blocks;
+  }
+
+  private buildCompletedGroupBlocks(cg: CompletedGroup): Block[] {
+    if (cg.category === 'thinking' && cg.thinkingTexts) {
+      return buildThinkingLiveBlocks(cg.thinkingTexts);
+    } else if (cg.category === 'tool' && cg.tools) {
+      return buildToolGroupLiveBlocks(cg.tools);
+    } else if (cg.category === 'subagent') {
+      return buildSubagentLiveBlocks(cg.agentDescription || '', cg.agentSteps || []);
+    }
+    return [];
+  }
+
   private buildUpdateAction(blocks: Block[], text: string): BundleAction {
     return {
       type: 'update',
@@ -395,6 +479,10 @@ export class GroupTracker {
 
   private shouldEmitUpdate(): boolean {
     if (!this.activeGroup) return false;
-    return Date.now() - this.activeGroup.lastUpdateTime >= DEBOUNCE_MS;
+    return this.shouldEmitUpdateForGroup(this.activeGroup);
+  }
+
+  private shouldEmitUpdateForGroup(group: ActiveGroup): boolean {
+    return Date.now() - group.lastUpdateTime >= DEBOUNCE_MS;
   }
 }

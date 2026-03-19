@@ -198,13 +198,13 @@ export class StreamProcessor {
     }
 
     // Try subagent complete first (toolUseId matches the Agent tool's id)
-    // Check if active group is a subagent with matching agentToolUseId before calling
-    const activeGroup = this.groupTracker.getActiveGroupData();
-    if (activeGroup && activeGroup.category === 'subagent' && activeGroup.agentToolUseId === toolUseId) {
+    // Check activeSubagents Map for matching agentToolUseId
+    const activeSubagent = this.groupTracker.getActiveSubagent(toolUseId);
+    if (activeSubagent) {
       // Extract agentId before handleSubagentComplete moves the group to completed
       const agentIdMatch = resultText.match(/agentId:\s*([\w]+)/);
       if (agentIdMatch) {
-        this.groupTracker.setAgentId(agentIdMatch[1]);
+        this.groupTracker.setAgentId(agentIdMatch[1], toolUseId);
       }
       const subagentActions = this.groupTracker.handleSubagentComplete(toolUseId, resultText, 0);
       result.bundleActions.push(...subagentActions);
