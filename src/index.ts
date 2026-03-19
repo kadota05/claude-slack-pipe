@@ -889,6 +889,18 @@ async function main(): Promise<void> {
   await startApp(app);
   logger.info('Claude Code Slack Bridge is running (Phase 2)');
 
+  // Prevent Slack SDK's reconnection failure from crashing the process.
+  // When WiFi drops, the SDK's internal reconnect throws RequestError as
+  // an unhandled rejection. We catch it here to keep the process alive
+  // until NetworkWatcher detects WiFi recovery and triggers a clean restart.
+  let isShuttingDown = false;
+  process.on('unhandledRejection', (reason: unknown) => {
+    if (isShuttingDown) return;
+    logger.error('[Resilience] Unhandled rejection caught (crash prevented)', {
+      error: reason instanceof Error ? reason.message : String(reason),
+    });
+  });
+
   // Update restart message if pending
   const restartPendingFile = path.join(os.homedir(), '.claude-slack-pipe', 'restart-pending.json');
   try {
@@ -907,6 +919,7 @@ async function main(): Promise<void> {
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {
+    isShuttingDown = true;
     logger.info(`Received ${signal}, shutting down...`);
     // End all alive sessions
     for (const entry of sessionIndexStore.getActive()) {
@@ -914,7 +927,7 @@ async function main(): Promise<void> {
     }
     tunnelManager.stopAll();
     // Clear crash history on intentional restart so it doesn't trigger circuit breaker
-    if (signal === 'restart-bridge' && process.env.MANAGED_BY_LAUNCHD) {
+    if ((signal === 'restart-bridge' || signal === 'wifi-reconnect') && process.env.MANAGED_BY_LAUNCHD) {
       const crashFile = path.join(os.homedir(), '.claude-slack-pipe', 'crash-history.json');
       try { fs.writeFileSync(crashFile, '[]'); } catch { /* best-effort */ }
     }
