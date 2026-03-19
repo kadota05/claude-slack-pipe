@@ -21,6 +21,8 @@ export class SessionCoordinator {
   private readonly entries = new Map<string, ManagedEntry>();
   private readonly globalQueue = new MessageQueue(10, 5 * 60 * 1000);
 
+  onIdleCallback?: () => void;
+
   constructor(config: CoordinatorConfig) {
     this.config = config;
   }
@@ -92,6 +94,16 @@ export class SessionCoordinator {
     }
   }
 
+  isAllIdle(): boolean {
+    for (const entry of this.entries.values()) {
+      const s = entry.session.state;
+      if (s === 'processing' || s === 'starting' || s === 'ending') {
+        return false;
+      }
+    }
+    return true;
+  }
+
   private async enforceUserLimit(userId: string): Promise<void> {
     const userSessions: ManagedEntry[] = [];
     for (const entry of this.entries.values()) {
@@ -136,6 +148,10 @@ export class SessionCoordinator {
 
       if (to === 'idle' && from === 'processing') {
         entry.crashCount = 0;
+      }
+
+      if (to === 'idle') {
+        this.onIdleCallback?.();
       }
     });
   }
