@@ -93,7 +93,7 @@ export class PersistentSession extends EventEmitter {
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: SLACK_CONTEXT_PREFIX + '\n' + prompt }],
+        content: [{ type: 'text', text: prompt }],
       },
     });
     this.transition('processing');
