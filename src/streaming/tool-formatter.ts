@@ -1,6 +1,7 @@
 // src/streaming/tool-formatter.ts
 
 import type { Block } from './types.js';
+import { DECORATION_ICONS } from './notification-text.js';
 
 export function getToolOneLiner(toolName: string, input: Record<string, unknown>): string {
   const stripLeadingSlash = (p: string) => p.replace(/^\//, '');
@@ -30,7 +31,7 @@ export function buildToolRunningBlocks(toolName: string, oneLiner: string): Bloc
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `:hourglass_flowing_sand: \`${toolName}\` ${escapeMarkdown(oneLiner)}`,
+        text: `${DECORATION_ICONS.tool} \`${toolName}\` ${escapeMarkdown(oneLiner)}`,
       },
     },
     {
@@ -47,7 +48,7 @@ export function buildToolCompletedBlocks(
   isError = false,
   toolUseId?: string,
 ): Block[] {
-  const icon = isError ? ':x:' : ':white_check_mark:';
+  const icon = isError ? DECORATION_ICONS.error : DECORATION_ICONS.completed;
   const durationStr = `${(durationMs / 1000).toFixed(1)}s`;
 
   const sectionBlock: Block = {
@@ -164,9 +165,9 @@ export function buildThinkingLiveBlocks(texts: string[]): Block[] {
 export function buildToolGroupLiveBlocks(tools: LiveToolInfo[]): Block[] {
   const lines: string[] = [];
   for (const tool of tools) {
-    const icon = tool.status === 'completed' ? ':white_check_mark:'
-      : tool.status === 'error' ? ':x:'
-      : ':hourglass_flowing_sand:';
+    const icon = tool.status === 'completed' ? DECORATION_ICONS.completed
+      : tool.status === 'error' ? DECORATION_ICONS.error
+      : DECORATION_ICONS.tool;
     const duration = tool.durationMs != null ? ` (${(tool.durationMs / 1000).toFixed(1)}s)` : '';
     const suffix = tool.status === 'running' ? ' — 実行中...' : duration;
     lines.push(`${icon} \`${tool.toolName}\` ${escapeMarkdown(tool.oneLiner)}${suffix}`);
@@ -181,8 +182,8 @@ export function buildSubagentLiveBlocks(description: string, steps: LiveStepInfo
   };
   const stepLines: string[] = [];
   for (const step of steps) {
-    const icon = step.status === 'completed' ? ':white_check_mark:'
-      : step.status === 'error' ? ':x:' : ':hourglass_flowing_sand:';
+    const icon = step.status === 'completed' ? DECORATION_ICONS.completed
+      : step.status === 'error' ? DECORATION_ICONS.error : DECORATION_ICONS.tool;
     stepLines.push(`  ${icon} \`${step.toolName}\` ${escapeMarkdown(step.oneLiner)}`);
   }
   const stepBlocks = buildContextBlocksFromLines(stepLines);

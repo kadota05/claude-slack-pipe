@@ -61,10 +61,10 @@ describe('getToolOneLiner', () => {
 });
 
 describe('buildToolRunningBlocks', () => {
-  it('returns blocks with hourglass icon', () => {
+  it('returns blocks with wrench icon', () => {
     const blocks = buildToolRunningBlocks('Read', 'src/auth.ts');
     expect(blocks).toHaveLength(2);
-    expect(blocks[0].text.text).toContain(':hourglass_flowing_sand:');
+    expect(blocks[0].text.text).toContain(':wrench:');
     expect(blocks[0].text.text).toContain('`Read`');
     expect(blocks[0].text.text).toContain('src/auth.ts');
     expect(blocks[1].elements[0].text).toContain('実行中');
@@ -74,14 +74,14 @@ describe('buildToolRunningBlocks', () => {
 describe('buildToolCompletedBlocks', () => {
   it('returns blocks with checkmark icon', () => {
     const blocks = buildToolCompletedBlocks('Read', 'src/auth.ts — 247行', 800);
-    expect(blocks[0].text.text).toContain(':white_check_mark:');
+    expect(blocks[0].text.text).toContain('✓');
     expect(blocks[0].text.text).toContain('`Read`');
     expect(blocks[1].elements[0].text).toContain('0.8s');
   });
 
   it('returns blocks with x icon on error', () => {
     const blocks = buildToolCompletedBlocks('Bash', 'exit code 1', 1200, true);
-    expect(blocks[0].text.text).toContain(':x:');
+    expect(blocks[0].text.text).toContain('✗');
   });
 });
 
@@ -149,7 +149,7 @@ describe('buildToolGroupLiveBlocks', () => {
     const allText = JSON.stringify(blocks);
     expect(allText).toContain('Read');
     expect(allText).toContain('src/auth.ts');
-    expect(allText).toContain('hourglass');
+    expect(allText).toContain(':wrench:');
   });
 
   it('shows completed tools with checkmark', () => {
@@ -158,8 +158,8 @@ describe('buildToolGroupLiveBlocks', () => {
       { toolName: 'Bash', oneLiner: 'npm test', status: 'running' },
     ]);
     const allText = JSON.stringify(blocks);
-    expect(allText).toContain('white_check_mark');
-    expect(allText).toContain('hourglass');
+    expect(allText).toContain('✓');
+    expect(allText).toContain(':wrench:');
   });
 
   it('handles 10+ tools with single context block', () => {
