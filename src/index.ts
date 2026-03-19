@@ -962,7 +962,7 @@ async function main(): Promise<void> {
           const result = await app.client.chat.postMessage({
             channel: entry.channelId,
             thread_ts: entry.threadTs,
-            text: '🔄 WiFi切断のため一時停止していました。再接続を検知したのでBridgeを再起動しています...',
+            text: '🔄 PCのWiFiが切断されたため一時停止していました。再接続を検知したのでBridgeを再起動しています...',
           });
           if (result.ts) {
             pendingMessages.push({
