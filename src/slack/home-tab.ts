@@ -10,7 +10,7 @@ export class HomeTabHandler {
     private readonly recentSessionScanner: RecentSessionScanner,
   ) {}
 
-  async publishHomeTab(userId: string): Promise<void> {
+  async publishHomeTab(userId: string, restartStatus?: 'idle' | 'restarting' | 'completed'): Promise<void> {
     const prefs = this.userPrefStore.get(userId);
     const projects = this.projectStore.getProjects();
     const directories = projects
@@ -48,6 +48,7 @@ export class HomeTabHandler {
       directoryId: prefs.activeDirectoryId,
       directories,
       recentSessions,
+      restartStatus,
     });
 
     try {
