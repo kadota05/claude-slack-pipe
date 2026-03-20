@@ -962,7 +962,7 @@ async function main(): Promise<void> {
 
       await app.client.views.open({ trigger_id: body.trigger_id, view: modal });
     } catch (err: any) {
-      logger.error(`[file-modal] Error opening file modal`, { filePath, error: err?.message || String(err) });
+      logger.error(`[file-modal] Error opening file modal`, { filePath, error: err?.message || String(err), data: JSON.stringify(err?.data || err?.response?.data || {}).substring(0, 500) });
       const errorMsg = err?.code === 'ENOENT'
         ? `ファイルが見つかりません: \`${filePath}\``
         : `ファイル表示エラー: ${err?.message || 'unknown'}`;
