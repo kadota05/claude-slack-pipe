@@ -115,10 +115,22 @@ export interface HomeTabParams {
     projectPath: string;
   }>;
   restartStatus?: 'idle' | 'restarting' | 'completed';
+  starredDirectoryIds?: string[];
 }
 
 export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
-  const { model, directoryId, directories, recentSessions, restartStatus = 'idle' } = params;
+  const { model, directoryId, directories, recentSessions, restartStatus = 'idle', starredDirectoryIds = [] } = params;
+
+  const displayName = (d: { id: string; name: string }) =>
+    (starredDirectoryIds.includes(d.id) ? '★ ' : '') + (d.name || d.id);
+
+  const sorted = [...directories].sort((a, b) => {
+    const aS = starredDirectoryIds.includes(a.id);
+    const bS = starredDirectoryIds.includes(b.id);
+    if (aS && !bS) return -1;
+    if (!aS && bS) return 1;
+    return 0;
+  });
 
   const restartButtonText =
     restartStatus === 'restarting' ? '🔄 再起動中...' :
@@ -145,23 +157,36 @@ export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
       },
     },
     // 3. Directory selector
-    ...(directories.length > 0 ? [{
+    ...(sorted.length > 0 ? [{
       type: 'section' as const,
       text: { type: 'mrkdwn' as const, text: '*Directory*' },
       accessory: {
         type: 'static_select' as const,
         action_id: 'home_set_directory',
-        ...(directoryId && directories.find(d => d.id === directoryId) ? {
+        ...(directoryId && sorted.find(d => d.id === directoryId) ? {
           initial_option: {
-            text: { type: 'plain_text' as const, text: directories.find(d => d.id === directoryId)!.name },
+            text: { type: 'plain_text' as const, text: displayName(sorted.find(d => d.id === directoryId)!) },
             value: directoryId,
           },
         } : {}),
-        options: directories.map(d => ({
-          text: { type: 'plain_text' as const, text: d.name || d.id },
+        options: sorted.map(d => ({
+          text: { type: 'plain_text' as const, text: displayName(d) },
           value: d.id,
         })),
       },
+    }] : []),
+    // 3b. Star toggle button
+    ...(sorted.length > 0 && directoryId && sorted.find(d => d.id === directoryId) ? [{
+      type: 'actions' as const,
+      elements: [{
+        type: 'button' as const,
+        action_id: 'toggle_star_directory',
+        text: {
+          type: 'plain_text' as const,
+          text: starredDirectoryIds.includes(directoryId) ? '★ お気に入り' : '☆ お気に入り',
+        },
+        value: directoryId,
+      }],
     }] : []),
     // 4. Divider
     { type: 'divider' },

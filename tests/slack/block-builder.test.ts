@@ -164,4 +164,76 @@ describe('buildHomeTabBlocks', () => {
     );
     expect(found).toBe(true);
   });
+
+  it('sorts starred directories first with ★ prefix', () => {
+    const blocks = buildHomeTabBlocks({
+      ...defaultParams,
+      directories: [
+        { id: 'aaa', name: 'alpha', path: '/alpha' },
+        { id: 'bbb', name: 'beta', path: '/beta' },
+        { id: 'ccc', name: 'gamma', path: '/gamma' },
+      ],
+      directoryId: 'aaa',
+      starredDirectoryIds: ['ccc'],
+    });
+    const dirSection = blocks.find((b: any) =>
+      b.accessory?.action_id === 'home_set_directory'
+    );
+    const options = dirSection.accessory.options;
+    expect(options[0].text.text).toBe('★ gamma');
+    expect(options[0].value).toBe('ccc');
+    expect(options[1].text.text).toBe('alpha');
+    expect(options[2].text.text).toBe('beta');
+  });
+
+  it('shows ★ prefix on initial_option when starred', () => {
+    const blocks = buildHomeTabBlocks({
+      ...defaultParams,
+      directories: [
+        { id: 'aaa', name: 'alpha', path: '/alpha' },
+      ],
+      directoryId: 'aaa',
+      starredDirectoryIds: ['aaa'],
+    });
+    const dirSection = blocks.find((b: any) =>
+      b.accessory?.action_id === 'home_set_directory'
+    );
+    expect(dirSection.accessory.initial_option.text.text).toBe('★ alpha');
+  });
+
+  it('shows ★ toggle button when directory is selected', () => {
+    const blocks = buildHomeTabBlocks({
+      ...defaultParams,
+      starredDirectoryIds: [],
+    });
+    const actionsBlock = blocks.find((b: any) =>
+      b.type === 'actions' && b.elements?.some((e: any) => e.action_id === 'toggle_star_directory')
+    );
+    expect(actionsBlock).toBeDefined();
+    expect(actionsBlock.elements[0].text.text).toContain('☆');
+  });
+
+  it('shows ★ on toggle button when directory is starred', () => {
+    const blocks = buildHomeTabBlocks({
+      ...defaultParams,
+      starredDirectoryIds: ['myapp'],
+    });
+    const actionsBlock = blocks.find((b: any) =>
+      b.type === 'actions' && b.elements?.some((e: any) => e.action_id === 'toggle_star_directory')
+    );
+    expect(actionsBlock.elements[0].text.text).toContain('★');
+    expect(actionsBlock.elements[0].value).toBe('myapp');
+  });
+
+  it('hides ★ toggle button when no directory selected', () => {
+    const blocks = buildHomeTabBlocks({
+      ...defaultParams,
+      directoryId: '',
+      starredDirectoryIds: [],
+    });
+    const actionsBlock = blocks.find((b: any) =>
+      b.type === 'actions' && b.elements?.some((e: any) => e.action_id === 'toggle_star_directory')
+    );
+    expect(actionsBlock).toBeUndefined();
+  });
 });
