@@ -236,11 +236,13 @@ export function buildFileContentModal(filePath: string, content: string): any {
   const blocks: Block[] = [];
   const fileName = filePath.split('/').pop() || filePath;
 
-  const parts = splitContent(content, 2850);
+  // Escape triple backticks in content to prevent breaking mrkdwn code blocks
+  const escaped = content.replace(/```/g, '` ` `');
+  const parts = splitContent(escaped, 2850);
   for (const part of parts) {
     blocks.push({
       type: 'section',
-      text: { type: 'mrkdwn', text: `\`\`\`\n${part}\n\`\`\`` },
+      text: { type: 'mrkdwn', text: `\`\`\`\n${part}\n\`\`\``, verbatim: true },
     });
   }
 
@@ -293,11 +295,12 @@ export function buildFileChunkModal(filePath: string, content: string, startLine
   const blocks: Block[] = [];
   const fileName = filePath.split('/').pop() || filePath;
 
-  const parts = splitContent(content, 2850);
+  const escaped = content.replace(/```/g, '` ` `');
+  const parts = splitContent(escaped, 2850);
   for (const part of parts) {
     blocks.push({
       type: 'section',
-      text: { type: 'mrkdwn', text: `\`\`\`\n${part}\n\`\`\`` },
+      text: { type: 'mrkdwn', text: `\`\`\`\n${part}\n\`\`\``, verbatim: true },
     });
   }
 

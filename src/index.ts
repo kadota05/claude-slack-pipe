@@ -206,11 +206,14 @@ async function main(): Promise<void> {
 
     // Block messages during auto-update
     if (autoUpdater?.isPendingUpdate()) {
-      await app.client.chat.postMessage({
+      const blockMsg = await app.client.chat.postMessage({
         channel: channelId,
         thread_ts: threadTs,
-        text: '🔄 システムを最新バージョンに更新中です。少々お待ちください。',
+        text: '🔄 システムを最新バージョンに更新中です。まもなく再起動します。',
       });
+      if (blockMsg.ts) {
+        autoUpdater.addBlockedMessage(channelId, blockMsg.ts);
+      }
       return;
     }
 
@@ -958,17 +961,21 @@ async function main(): Promise<void> {
       modal.private_metadata = threadTs;
 
       await app.client.views.open({ trigger_id: body.trigger_id, view: modal });
-    } catch {
-      const modal = {
+    } catch (err: any) {
+      logger.error(`[file-modal] Error opening file modal`, { filePath, error: err?.message || String(err) });
+      const errorMsg = err?.code === 'ENOENT'
+        ? `ファイルが見つかりません: \`${filePath}\``
+        : `ファイル表示エラー: ${err?.message || 'unknown'}`;
+      const errorModal = {
         type: 'modal',
         title: { type: 'plain_text', text: 'エラー' },
         close: { type: 'plain_text', text: '閉じる' },
         blocks: [{
           type: 'section',
-          text: { type: 'mrkdwn', text: `ファイルが見つかりません: \`${filePath}\`` },
+          text: { type: 'mrkdwn', text: errorMsg },
         }],
       };
-      await app.client.views.open({ trigger_id: body.trigger_id, view: modal });
+      await app.client.views.open({ trigger_id: body.trigger_id, view: errorModal });
     }
   });
 
@@ -1033,6 +1040,32 @@ async function main(): Promise<void> {
       error: reason instanceof Error ? reason.message : String(reason),
     });
   });
+
+  // Update auto-update blocked messages if any
+  const autoUpdateNotifyFile = path.join(os.homedir(), '.claude-slack-pipe', 'auto-update-notify.json');
+  try {
+    if (fs.existsSync(autoUpdateNotifyFile)) {
+      const raw = JSON.parse(fs.readFileSync(autoUpdateNotifyFile, 'utf-8'));
+      fs.unlinkSync(autoUpdateNotifyFile);
+      for (const msg of raw.messages || []) {
+        if (!msg.channel || !msg.ts) continue;
+        try {
+          await app.client.chat.update({
+            channel: msg.channel,
+            ts: msg.ts,
+            text: '✅ 自動更新が完了しました。通常通り使えます。',
+          });
+        } catch (err) {
+          logger.warn('[AutoUpdater] Failed to update blocked message', {
+            channel: msg.channel, ts: msg.ts,
+            error: (err as Error).message,
+          });
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn('[AutoUpdater] Failed to process notify file', { error: (err as Error).message });
+  }
 
   // Update restart message if pending
   const restartPendingFile = path.join(os.homedir(), '.claude-slack-pipe', 'restart-pending.json');
