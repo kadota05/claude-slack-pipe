@@ -114,12 +114,32 @@ export interface HomeTabParams {
     firstPromptPreview: string;
     projectPath: string;
   }>;
+  restartStatus?: 'idle' | 'restarting' | 'completed';
 }
 
 export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
-  const { model, directoryId, directories, recentSessions } = params;
+  const { model, directoryId, directories, recentSessions, restartStatus = 'idle' } = params;
+
+  const restartButtonText =
+    restartStatus === 'restarting' ? '🔄 Restarting...' :
+    restartStatus === 'completed' ? '✅ Restart Complete' :
+    '⚡ Restart Bridge';
 
   const blocks: Block[] = [
+    // 0. Restart button
+    {
+      type: 'actions',
+      elements: [{
+        type: 'button',
+        action_id: 'home_restart_bridge',
+        text: { type: 'plain_text', text: restartButtonText },
+      }],
+    },
+    // 0.1 Description (idle only)
+    ...(restartStatus === 'idle' ? [{
+      type: 'context' as const,
+      elements: [{ type: 'mrkdwn' as const, text: '_Not responding? Try restarting._' }],
+    }] : []),
     // 1. Model selector
     {
       type: 'section',
