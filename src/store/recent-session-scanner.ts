@@ -3,12 +3,14 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { logger } from '../utils/logger.js';
 import { decodeProjectId } from './project-store.js';
+import { SLACK_CONTEXT_PREFIX } from '../bridge/slack-context.js';
 import type { RecentSession } from '../types.js';
 
 const MAX_CANDIDATES = 15;
 const MAX_LINES_TO_READ = 20;
 const MAX_DISPLAY = 5;
 const PREVIEW_LENGTH = 50;
+const RECURRING_PREFIX_LENGTH = 50;
 
 /**
  * Strip Claude Code command XML tags from user messages.
@@ -18,6 +20,13 @@ const PREVIEW_LENGTH = 50;
  *   <command-args>actual prompt</command-args>
  * Returns { commandName, body } where body is the user's actual text.
  */
+export function stripSlackContext(raw: string): string {
+  if (raw.startsWith('[Slack Bridge Context]')) {
+    return raw.slice(SLACK_CONTEXT_PREFIX.length).trim();
+  }
+  return raw;
+}
+
 export function stripCommandTags(raw: string): { commandName: string | null; body: string } {
   const nameMatch = raw.match(/<command-name>\/?([^<]+)<\/command-name>/);
   const argsMatch = raw.match(/<command-args>([\s\S]*?)<\/command-args>/);
@@ -48,7 +57,8 @@ export class RecentSessionScanner {
     for (const c of candidates) {
       const rawPrompt = await this.readFirstUserMessage(c.filePath);
       if (rawPrompt === null) continue;
-      const { commandName, body } = stripCommandTags(rawPrompt);
+      const stripped = stripSlackContext(rawPrompt);
+      const { commandName, body } = stripCommandTags(stripped);
       const firstPrompt = body || rawPrompt;
       const parts = decodeProjectId(c.projectId).split('/').filter(Boolean);
 
@@ -173,8 +183,12 @@ export class RecentSessionScanner {
   private filterRecurring(sessions: RecentSession[]): RecentSession[] {
     const promptCounts = new Map<string, number>();
     for (const s of sessions) {
-      promptCounts.set(s.firstPrompt, (promptCounts.get(s.firstPrompt) || 0) + 1);
+      const prefix = s.firstPrompt.slice(0, RECURRING_PREFIX_LENGTH);
+      promptCounts.set(prefix, (promptCounts.get(prefix) || 0) + 1);
     }
-    return sessions.filter(s => (promptCounts.get(s.firstPrompt) || 0) < 2);
+    return sessions.filter(s => {
+      const prefix = s.firstPrompt.slice(0, RECURRING_PREFIX_LENGTH);
+      return (promptCounts.get(prefix) || 0) < 2;
+    });
   }
 }
