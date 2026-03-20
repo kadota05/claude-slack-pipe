@@ -33,26 +33,36 @@ import { TunnelManager } from './streaming/tunnel-manager.js';
 import { NetworkWatcher } from './utils/network-watcher.js';
 import { AutoUpdater } from './auto-updater.js';
 
-function waitForIdle(session: PersistentSession, timeoutMs = 300000): Promise<void> {
+/**
+ * Wait for CLI to initialize (starting → processing or idle).
+ * Does NOT wait for the first turn to complete — that is handled by wireSessionOutput.
+ */
+function waitForInit(session: PersistentSession, timeoutMs = 30000): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (session.state === 'idle') { resolve(); return; }
-    logger.info(`[waitForIdle] waiting for session ${session.sessionId}, current state: ${session.state}`);
+    if (session.state !== 'starting') { resolve(); return; }
+    logger.info(`[waitForInit] waiting for session ${session.sessionId} to initialize`);
     const timer = setTimeout(() => {
-      logger.error(`[waitForIdle] timeout after ${timeoutMs}ms, state: ${session.state}`);
+      logger.error(`[waitForInit] timeout after ${timeoutMs}ms, state: ${session.state}`);
       reject(new Error('Session init timeout'));
     }, timeoutMs);
-    session.on('stateChange', (_from: string, to: string) => {
-      logger.info(`[waitForIdle] stateChange: ${_from} → ${to}`);
-      if (to === 'idle') { clearTimeout(timer); resolve(); }
+    const onStateChange = (_from: string, to: string) => {
+      logger.info(`[waitForInit] stateChange: ${_from} → ${to}`);
+      if (to === 'processing' || to === 'idle') {
+        clearTimeout(timer);
+        session.removeListener('stateChange', onStateChange);
+        resolve();
+      }
       if (to === 'dead') {
         clearTimeout(timer);
+        session.removeListener('stateChange', onStateChange);
         if (session.wasInterrupted) {
-          resolve(); // Interrupted by user — not an error
+          resolve();
         } else {
           reject(new Error('Session died during init'));
         }
       }
-    });
+    };
+    session.on('stateChange', onStateChange);
   });
 }
 
@@ -424,7 +434,7 @@ async function main(): Promise<void> {
     // Wire message handler for this session (idempotent — check if already wired)
     wireSessionOutput(session, channelId, threadTs, reactionManager, app.client, sessionIndexStore);
 
-    // For a new/starting session, send the initial prompt BEFORE waiting for idle.
+    // For a new/starting session, send the initial prompt BEFORE waiting for init.
     // Claude CLI stream-json mode requires a user message on stdin before it emits
     // the system init event — without this the bridge deadlocks.
     if (session.state === 'starting') {
@@ -433,8 +443,9 @@ async function main(): Promise<void> {
       await reactionManager.addSpawning(channelId, messageTs);
 
       try {
-        await waitForIdle(session);
+        await waitForInit(session);
       } catch (err) {
+        session.end();
         await app.client.chat.postMessage({
           channel: channelId,
           thread_ts: threadTs,

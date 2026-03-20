@@ -189,6 +189,7 @@ export class PersistentSession extends EventEmitter {
       '--output-format', 'stream-json',
       '--verbose',
       '--model', this.params.model,
+      '--permission-mode', 'bypassPermissions',
       // No budget limit — run without --max-budget-usd
       '--replay-user-messages',
     ];
