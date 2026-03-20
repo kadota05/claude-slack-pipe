@@ -230,6 +230,85 @@ export function buildBundleDetailModal(entries: BundleEntry[], sessionId: string
   };
 }
 
+const LINES_PER_CHUNK = 100;
+
+export function buildFileContentModal(filePath: string, content: string): any {
+  const blocks: Block[] = [];
+  const fileName = filePath.split('/').pop() || filePath;
+
+  const parts = splitContent(content, 2850);
+  for (const part of parts) {
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: `\`\`\`\n${part}\n\`\`\`` },
+    });
+  }
+
+  return {
+    type: 'modal',
+    title: { type: 'plain_text', text: truncate(fileName, 24) },
+    close: { type: 'plain_text', text: '閉じる' },
+    blocks: blocks.slice(0, 100),
+  };
+}
+
+export function buildFileChunksModal(filePath: string, totalLines: number): any {
+  const blocks: Block[] = [];
+  const fileName = filePath.split('/').pop() || filePath;
+
+  blocks.push({
+    type: 'section',
+    text: { type: 'mrkdwn', text: `:page_facing_up: \`${filePath}\` (${totalLines}行)` },
+  });
+  blocks.push({ type: 'divider' });
+
+  const buttons: any[] = [];
+  for (let start = 1; start <= totalLines; start += LINES_PER_CHUNK) {
+    const end = Math.min(start + LINES_PER_CHUNK - 1, totalLines);
+    const index = buttons.length;
+    buttons.push({
+      type: 'button',
+      text: { type: 'plain_text', text: `${start}-${end}行` },
+      action_id: `view_file_chunk:${index}`,
+      value: `${filePath}:${start}:${end}`,
+    });
+  }
+
+  for (let i = 0; i < buttons.length; i += 25) {
+    blocks.push({
+      type: 'actions',
+      elements: buttons.slice(i, i + 25),
+    });
+  }
+
+  return {
+    type: 'modal',
+    title: { type: 'plain_text', text: truncate(fileName, 24) },
+    close: { type: 'plain_text', text: '閉じる' },
+    blocks: blocks.slice(0, 100),
+  };
+}
+
+export function buildFileChunkModal(filePath: string, content: string, startLine: number, endLine: number): any {
+  const blocks: Block[] = [];
+  const fileName = filePath.split('/').pop() || filePath;
+
+  const parts = splitContent(content, 2850);
+  for (const part of parts) {
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: `\`\`\`\n${part}\n\`\`\`` },
+    });
+  }
+
+  return {
+    type: 'modal',
+    title: { type: 'plain_text', text: truncate(`${fileName} ${startLine}-${endLine}`, 24) },
+    close: { type: 'plain_text', text: '閉じる' },
+    blocks: blocks.slice(0, 100),
+  };
+}
+
 function formatInput(toolName: string, input: Record<string, unknown>): string {
   switch (toolName) {
     case 'Read':
