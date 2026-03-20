@@ -752,8 +752,24 @@ async function main(): Promise<void> {
     }
   });
 
+  app.action('home_restart_bridge', async ({ ack, body }: any) => {
+    await ack();
+    const userId = body.user.id;
 
+    // Guard: if restart already pending, ignore
+    const restartPendingFile = path.join(os.homedir(), '.claude-slack-pipe', 'restart-pending.json');
+    if (fs.existsSync(restartPendingFile)) return;
 
+    // Update home tab to show restarting status
+    await homeTabHandler.publishHomeTab(userId, 'restarting');
+
+    // Save pending info for post-restart recovery
+    try {
+      fs.writeFileSync(restartPendingFile, JSON.stringify({ homeTabUserId: userId }));
+    } catch { /* best-effort */ }
+
+    await shutdown('restart-bridge');
+  });
 
   // --- Permission Prompt Actions ---
 
@@ -1100,6 +1116,18 @@ async function main(): Promise<void> {
     if (fs.existsSync(restartPendingFile)) {
       const raw = JSON.parse(fs.readFileSync(restartPendingFile, 'utf-8'));
       fs.unlinkSync(restartPendingFile);
+
+      // Home tab restart recovery
+      if (raw.homeTabUserId) {
+        try {
+          await homeTabHandler.publishHomeTab(raw.homeTabUserId, 'completed');
+        } catch (err) {
+          logger.warn('Failed to publish restart-complete home tab', {
+            userId: raw.homeTabUserId,
+            error: (err as Error).message,
+          });
+        }
+      }
 
       // Support both old format ({ channel, ts }) and new format ({ messages: [...] })
       const messages: Array<{ channel: string; ts: string }> =
