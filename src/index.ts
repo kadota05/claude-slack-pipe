@@ -22,7 +22,7 @@ import os from 'node:os';
 import type { PersistentSession } from './bridge/persistent-session.js';
 import { StreamProcessor } from './streaming/stream-processor.js';
 import { SlackActionExecutor } from './streaming/slack-action-executor.js';
-import { buildToolModal, buildThinkingModal, buildSubagentModal, buildBundleDetailModal } from './slack/modal-builder.js';
+import { buildToolModal, buildThinkingModal, buildSubagentModal, buildBundleDetailModal, buildFileContentModal, buildFileChunksModal, buildFileChunkModal } from './slack/modal-builder.js';
 import type { BundleAction } from './streaming/types.js';
 import { SerialActionQueue } from './streaming/serial-action-queue.js';
 import { SessionJsonlReader } from './streaming/session-jsonl-reader.js';
@@ -921,6 +921,99 @@ async function main(): Promise<void> {
       await app.client.views.push({ trigger_id: body.trigger_id, view: modal });
     } else {
       await app.client.views.open({ trigger_id: body.trigger_id, view: modal });
+    }
+  });
+
+  // --- File Content Modal Action ---
+  app.action('view_file_content', async ({ ack, body }: any) => {
+    await ack();
+    const filePath = body.actions?.[0]?.value;
+    if (!filePath) return;
+
+    const threadTs = body.message?.thread_ts || body.message?.ts || '';
+    const entry = threadTs ? sessionIndexStore.findByThreadTs(threadTs) : null;
+    const cwd = entry?.projectPath || process.cwd();
+
+    const resolved = path.resolve(cwd, filePath);
+    const normalizedCwd = path.resolve(cwd) + path.sep;
+
+    if (!resolved.startsWith(normalizedCwd) && resolved !== path.resolve(cwd)) {
+      logger.warn(`Path traversal blocked: ${filePath}`);
+      return;
+    }
+
+    try {
+      const content = fs.readFileSync(resolved, 'utf-8');
+      const lines = content.split('\n');
+      const MODAL_MAX_BLOCKS = 98;
+      const blocksNeeded = Math.ceil(content.length / 2850);
+
+      let modal: any;
+      if (blocksNeeded <= MODAL_MAX_BLOCKS) {
+        modal = buildFileContentModal(filePath, content);
+      } else {
+        modal = buildFileChunksModal(filePath, lines.length);
+      }
+      modal.private_metadata = threadTs;
+
+      await app.client.views.open({ trigger_id: body.trigger_id, view: modal });
+    } catch {
+      const modal = {
+        type: 'modal',
+        title: { type: 'plain_text', text: 'エラー' },
+        close: { type: 'plain_text', text: '閉じる' },
+        blocks: [{
+          type: 'section',
+          text: { type: 'mrkdwn', text: `ファイルが見つかりません: \`${filePath}\`` },
+        }],
+      };
+      await app.client.views.open({ trigger_id: body.trigger_id, view: modal });
+    }
+  });
+
+  // --- File Chunk Modal Action ---
+  app.action(/^view_file_chunk:/, async ({ ack, body }: any) => {
+    await ack();
+    const value = body.actions?.[0]?.value;
+    if (!value) return;
+
+    const lastColon2 = value.lastIndexOf(':');
+    const lastColon1 = value.lastIndexOf(':', lastColon2 - 1);
+    const filePath = value.substring(0, lastColon1);
+    const startLine = parseInt(value.substring(lastColon1 + 1, lastColon2), 10);
+    const endLine = parseInt(value.substring(lastColon2 + 1), 10);
+
+    if (!filePath || isNaN(startLine) || isNaN(endLine)) return;
+
+    const privateMetadata = body.view?.private_metadata || '';
+    const entry = privateMetadata ? sessionIndexStore.findByThreadTs(privateMetadata) : null;
+    const cwd = entry?.projectPath || process.cwd();
+
+    const resolved = path.resolve(cwd, filePath);
+    const normalizedCwd = path.resolve(cwd) + path.sep;
+
+    if (!resolved.startsWith(normalizedCwd) && resolved !== path.resolve(cwd)) {
+      logger.warn(`Path traversal blocked: ${filePath}`);
+      return;
+    }
+
+    try {
+      const content = fs.readFileSync(resolved, 'utf-8');
+      const lines = content.split('\n');
+      const chunk = lines.slice(startLine - 1, endLine).join('\n');
+      const modal = buildFileChunkModal(filePath, chunk, startLine, endLine);
+      await app.client.views.push({ trigger_id: body.trigger_id, view: modal });
+    } catch {
+      const modal = {
+        type: 'modal',
+        title: { type: 'plain_text', text: 'エラー' },
+        close: { type: 'plain_text', text: '閉じる' },
+        blocks: [{
+          type: 'section',
+          text: { type: 'mrkdwn', text: `ファイルが見つかりません: \`${filePath}\`` },
+        }],
+      };
+      await app.client.views.push({ trigger_id: body.trigger_id, view: modal });
     }
   });
 
