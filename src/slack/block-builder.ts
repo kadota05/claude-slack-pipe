@@ -214,7 +214,7 @@ export function buildResponseFooter(params: {
     ? `${(params.contextWindow / 1_000_000).toFixed(0)}M`
     : `${(params.contextWindow / 1_000).toFixed(0)}k`;
   const approx = params.isApproximate ? '~' : '';
-  const text = `ctx ${approx}${formatTokens(capped)}/${ctxWindowLabel}(${ctxPct.toFixed(1)}%) | ${params.model} | ${formatDuration(params.durationMs)}`;
+  const text = `${params.model} | ${approx}${formatTokens(capped)}/${ctxWindowLabel}(${ctxPct.toFixed(1)}%) | ${formatDuration(params.durationMs)}`;
   return [{
     type: 'context',
     elements: [{ type: 'mrkdwn', text }],
