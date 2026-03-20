@@ -31,8 +31,15 @@ Slackのbundle「詳細を見る」ボタンをクリックすると、ラベル
 - **SessionJsonlReader**: `readBundleByKey()`でJSONLファイルをスキャンし、キーに一致するbundleを特定
 - **後方互換**: 古い数値形式の`action_id`は従来の`readBundle(bundleIndex)`にフォールバック
 
+### 追加修正: サブエージェントのbundleKeyが見つからない問題
+
+初回修正では`extractBundleKey`がサブエージェントの内部ツールID（`agentSteps[0].toolUseId`）をキーに使っていた。しかしこれはchild eventのIDであり、`findBundleIndexByKey`はchild eventをスキップするためJSONLから見つからなかった。
+
+修正: `CompletedGroup`に`agentToolUseId`フィールドを追加し、Agent tool_use自体のID（トップレベルイベント）をキーとして使用するように変更。
+
 ## 教訓
 
 - **プロセスライフサイクルをまたぐ連番カウンタは危険。** 再起動でリセットされるメモリ内カウンタと、蓄積されるファイルストレージを連番で紐づけてはいけない
 - **コンテンツアドレッサブルキーはプロセス再起動に強い。** `tool_use_id`はClaude APIが生成するグローバルユニークIDなので、プロセスの状態に依存しない
 - **CLIのリプレイ機能を考慮する。** `--replay-user-messages`で再開すると過去イベントがstdoutに再送される。ストリーム処理はこの重複を想定する必要がある
+- **child eventとtop-level eventの区別を意識する。** サブエージェント内部のtool_use_idはchild eventとしてJSONLに記録され、検索時にスキップされる。キーにはトップレベルのIDを使うこと
