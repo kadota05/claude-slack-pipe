@@ -432,7 +432,7 @@ async function main(): Promise<void> {
     }
 
     // Wire message handler for this session (idempotent — check if already wired)
-    wireSessionOutput(session, channelId, threadTs, reactionManager, app.client, sessionIndexStore);
+    wireSessionOutput(session, channelId, threadTs, reactionManager, app.client, sessionIndexStore, indexEntry.projectPath);
 
     // For a new/starting session, send the initial prompt BEFORE waiting for init.
     // Claude CLI stream-json mode requires a user message on stdin before it emits
@@ -498,6 +498,7 @@ async function main(): Promise<void> {
     rm: ReactionManager,
     client: any,
     indexStore: SessionIndexStore,
+    projectPath: string,
   ): void {
     if (wiredSessions.has(session.sessionId)) return;
     wiredSessions.add(session.sessionId);
@@ -507,6 +508,7 @@ async function main(): Promise<void> {
       channel: channelId,
       threadTs,
       sessionId: session.sessionId,
+      cwd: projectPath,
       tunnelManager,
       onFirstContent: () => {
         const msgTs = activeMessageTs.get(session.sessionId);

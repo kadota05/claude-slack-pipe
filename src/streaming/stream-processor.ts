@@ -6,6 +6,8 @@ import { GroupTracker } from './group-tracker.js';
 import { TunnelManager } from './tunnel-manager.js';
 import { notifyText } from './notification-text.js';
 import { extractLocalUrls, rewriteLocalUrls } from './localhost-rewriter.js';
+import { extractFilePaths } from './file-path-extractor.js';
+import { buildFileReferenceBlocks } from './file-reference-blocks.js';
 import type { TokenUsage } from '../types.js';
 import type {
   SlackAction,
@@ -18,6 +20,7 @@ interface StreamProcessorConfig {
   channel: string;
   threadTs: string;
   sessionId: string;
+  cwd?: string;
   tunnelManager?: TunnelManager;
   onFirstContent?: () => void;
 }
@@ -292,6 +295,16 @@ export class StreamProcessor {
 
       logger.info(`[tunnel-debug] final converted text: ${JSON.stringify(converted.substring(0, 500))}`);
       const blocks = this.buildTextBlocks(converted);
+
+      // Append file reference buttons
+      const filePaths = extractFilePaths(this.textBuffer, this.config.cwd ?? process.cwd());
+      if (filePaths.length > 0) {
+        const maxFileBlocks = 50 - blocks.length;
+        if (maxFileBlocks > 1) {
+          const fileBlocks = buildFileReferenceBlocks(filePaths, maxFileBlocks);
+          blocks.push(...fileBlocks);
+        }
+      }
 
       if (this.textMessageTs) {
         // Already posted — update with final content
