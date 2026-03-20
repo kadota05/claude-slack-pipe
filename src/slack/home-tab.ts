@@ -43,6 +43,13 @@ export class HomeTabHandler {
       logger.error('Failed to scan recent sessions', { error: (err as Error).message });
     }
 
+    logger.info('[publishHomeTab] building blocks', {
+      userId,
+      directoryId: prefs.activeDirectoryId,
+      starredDirectoryIds: prefs.starredDirectoryIds,
+      dirCount: directories.length,
+    });
+
     const blocks = buildHomeTabBlocks({
       model: prefs.defaultModel,
       directoryId: prefs.activeDirectoryId,
@@ -52,13 +59,19 @@ export class HomeTabHandler {
       starredDirectoryIds: prefs.starredDirectoryIds ?? [],
     });
 
+    // Use private_metadata with timestamp to force Slack to recognize view as new.
+    // Without this, Slack mobile may skip re-rendering after static_select interactions.
+    const view = {
+      type: 'home' as const,
+      blocks,
+      private_metadata: JSON.stringify({ ts: Date.now() }),
+    };
+
     try {
-      await this.client.views.publish({
-        user_id: userId,
-        view: { type: 'home', blocks },
-      });
+      const result = await this.client.views.publish({ user_id: userId, view });
+      logger.info('[publishHomeTab] views.publish result', { ok: result?.ok, error: result?.error });
     } catch (err) {
-      logger.error('Failed to publish home tab', { error: (err as Error).message });
+      logger.error('[publishHomeTab] views.publish FAILED', { error: (err as Error).message, stack: (err as Error).stack });
     }
   }
 }

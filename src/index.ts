@@ -764,8 +764,16 @@ async function main(): Promise<void> {
     await ack();
     const userId = body.user.id;
     const directoryId = body.actions?.[0]?.value;
+    logger.info('[toggle_star] received', { userId, directoryId, rawActions: JSON.stringify(body.actions) });
     if (directoryId) {
-      await actionHandler.handleToggleStar(userId, directoryId);
+      try {
+        await actionHandler.handleToggleStar(userId, directoryId);
+        logger.info('[toggle_star] completed successfully', { userId, directoryId });
+      } catch (err) {
+        logger.error('[toggle_star] failed', { error: (err as Error).message, stack: (err as Error).stack });
+      }
+    } else {
+      logger.warn('[toggle_star] no directoryId found in action value');
     }
   });
 
