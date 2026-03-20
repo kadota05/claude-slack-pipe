@@ -677,8 +677,16 @@ async function main(): Promise<void> {
     await handleMessage(event);
   });
 
+  // Track pending restart-complete for home tab
+  let restartCompletePendingUser: string | null = null;
+
   app.event('app_home_opened', async ({ event }) => {
-    await homeTabHandler.publishHomeTab(event.user);
+    if (restartCompletePendingUser === event.user) {
+      restartCompletePendingUser = null;
+      await homeTabHandler.publishHomeTab(event.user, 'completed');
+    } else {
+      await homeTabHandler.publishHomeTab(event.user);
+    }
   });
 
   // Interrupt via reaction — only targets messages currently being processed
@@ -1119,6 +1127,7 @@ async function main(): Promise<void> {
 
       // Home tab restart recovery
       if (raw.homeTabUserId) {
+        restartCompletePendingUser = raw.homeTabUserId;
         try {
           await homeTabHandler.publishHomeTab(raw.homeTabUserId, 'completed');
         } catch (err) {
@@ -1127,6 +1136,16 @@ async function main(): Promise<void> {
             error: (err as Error).message,
           });
         }
+        // Retry after delay in case Socket Mode wasn't connected yet
+        const pendingUser = raw.homeTabUserId;
+        setTimeout(async () => {
+          if (restartCompletePendingUser === pendingUser) {
+            restartCompletePendingUser = null;
+            try {
+              await homeTabHandler.publishHomeTab(pendingUser, 'completed');
+            } catch { /* best-effort */ }
+          }
+        }, 5000);
       }
 
       // Support both old format ({ channel, ts }) and new format ({ messages: [...] })
