@@ -34,10 +34,17 @@ describe('ActionHandler', () => {
   });
 
   describe('handleSetDirectory', () => {
-    it('updates preference and refreshes home tab', async () => {
+    it('updates preference and publishes with star button hidden, then re-publishes after delay', async () => {
+      vi.useFakeTimers();
       await handler.handleSetDirectory('U001', 'dir-123');
       expect(mockUserPrefStore.setDirectory).toHaveBeenCalledWith('U001', 'dir-123');
-      expect(mockHomeTab.publishHomeTab).toHaveBeenCalledWith('U001');
+      // Phase 1: star button hidden
+      expect(mockHomeTab.publishHomeTab).toHaveBeenCalledWith('U001', undefined, { hideStarButton: true });
+      // Phase 2: re-publish with star button after delay
+      vi.advanceTimersByTime(1500);
+      expect(mockHomeTab.publishHomeTab).toHaveBeenCalledTimes(2);
+      expect(mockHomeTab.publishHomeTab).toHaveBeenLastCalledWith('U001');
+      vi.useRealTimers();
     });
   });
 
