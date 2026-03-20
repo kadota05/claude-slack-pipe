@@ -3,6 +3,11 @@ import { logger } from '../utils/logger.js';
 import type { RecentSessionScanner } from '../store/recent-session-scanner.js';
 
 export class HomeTabHandler {
+  // Per-user publish queue to prevent concurrent views.publish calls.
+  // Rapid actions (e.g. directory change + star toggle) can fire two
+  // publishes simultaneously, confusing the Slack mobile client.
+  private publishQueue = new Map<string, Promise<void>>();
+
   constructor(
     private readonly client: any,
     private readonly userPrefStore: any,
@@ -10,7 +15,22 @@ export class HomeTabHandler {
     private readonly recentSessionScanner: RecentSessionScanner,
   ) {}
 
-  async publishHomeTab(userId: string, restartStatus?: 'idle' | 'restarting' | 'completed'): Promise<void> {
+  async publishHomeTab(
+    userId: string,
+    restartStatus?: 'idle' | 'restarting' | 'completed',
+    options?: { hideStarButton?: boolean },
+  ): Promise<void> {
+    const prev = this.publishQueue.get(userId) ?? Promise.resolve();
+    const next = prev.then(() => this.doPublishHomeTab(userId, restartStatus, options)).catch(() => {});
+    this.publishQueue.set(userId, next);
+    return next;
+  }
+
+  private async doPublishHomeTab(
+    userId: string,
+    restartStatus?: 'idle' | 'restarting' | 'completed',
+    options?: { hideStarButton?: boolean },
+  ): Promise<void> {
     const prefs = this.userPrefStore.get(userId);
     const projects = this.projectStore.getProjects();
     const directories = projects
@@ -57,6 +77,7 @@ export class HomeTabHandler {
       recentSessions,
       restartStatus,
       starredDirectoryIds: prefs.starredDirectoryIds ?? [],
+      hideStarButton: options?.hideStarButton,
     });
 
     // Use private_metadata with timestamp to force Slack to recognize view as new.

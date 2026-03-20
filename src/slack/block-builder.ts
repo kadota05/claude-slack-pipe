@@ -116,10 +116,11 @@ export interface HomeTabParams {
   }>;
   restartStatus?: 'idle' | 'restarting' | 'completed';
   starredDirectoryIds?: string[];
+  hideStarButton?: boolean;
 }
 
 export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
-  const { model, directoryId, directories, recentSessions, restartStatus = 'idle', starredDirectoryIds = [] } = params;
+  const { model, directoryId, directories, recentSessions, restartStatus = 'idle', starredDirectoryIds = [], hideStarButton = false } = params;
 
   const displayName = (d: { id: string; name: string }) =>
     (starredDirectoryIds.includes(d.id) ? '★ ' : '') + (d.name || d.id);
@@ -175,8 +176,8 @@ export function buildHomeTabBlocks(params: HomeTabParams): Block[] {
         })),
       },
     }] : []),
-    // 3b. Star toggle button
-    ...(sorted.length > 0 && directoryId && sorted.find(d => d.id === directoryId) ? [{
+    // 3b. Star toggle button (hidden during directory transition to prevent stale interaction)
+    ...(!hideStarButton && sorted.length > 0 && directoryId && sorted.find(d => d.id === directoryId) ? [{
       type: 'actions' as const,
       elements: [{
         type: 'button' as const,

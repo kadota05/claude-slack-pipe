@@ -763,8 +763,12 @@ async function main(): Promise<void> {
   app.action('toggle_star_directory', async ({ ack, body }: any) => {
     await ack();
     const userId = body.user.id;
-    const directoryId = body.actions?.[0]?.value;
-    logger.info('[toggle_star] received', { userId, directoryId, rawActions: JSON.stringify(body.actions) });
+    // Use activeDirectoryId from store, not the button value.
+    // The button value may be stale if Slack mobile hasn't re-rendered
+    // the view yet after a directory change.
+    const prefs = userPrefStore.get(userId);
+    const directoryId = prefs.activeDirectoryId;
+    logger.info('[toggle_star] received', { userId, directoryId, buttonValue: body.actions?.[0]?.value });
     if (directoryId) {
       try {
         await actionHandler.handleToggleStar(userId, directoryId);
@@ -773,7 +777,7 @@ async function main(): Promise<void> {
         logger.error('[toggle_star] failed', { error: (err as Error).message, stack: (err as Error).stack });
       }
     } else {
-      logger.warn('[toggle_star] no directoryId found in action value');
+      logger.warn('[toggle_star] no activeDirectoryId in user prefs');
     }
   });
 
