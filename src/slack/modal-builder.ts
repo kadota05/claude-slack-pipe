@@ -236,13 +236,12 @@ export function buildFileContentModal(filePath: string, content: string): any {
   const blocks: Block[] = [];
   const fileName = filePath.split('/').pop() || filePath;
 
-  // Escape triple backticks in content to prevent breaking mrkdwn code blocks
-  const escaped = content.replace(/```/g, '` ` `');
-  const parts = splitContent(escaped, 2850);
+  // Use plain_text to avoid all mrkdwn escaping issues with file content
+  const parts = splitContent(content, 2950);
   for (const part of parts) {
     blocks.push({
       type: 'section',
-      text: { type: 'mrkdwn', text: `\`\`\`\n${part}\n\`\`\``, verbatim: true },
+      text: { type: 'plain_text', text: part },
     });
   }
 
@@ -295,12 +294,11 @@ export function buildFileChunkModal(filePath: string, content: string, startLine
   const blocks: Block[] = [];
   const fileName = filePath.split('/').pop() || filePath;
 
-  const escaped = content.replace(/```/g, '` ` `');
-  const parts = splitContent(escaped, 2850);
+  const parts = splitContent(content, 2950);
   for (const part of parts) {
     blocks.push({
       type: 'section',
-      text: { type: 'mrkdwn', text: `\`\`\`\n${part}\n\`\`\``, verbatim: true },
+      text: { type: 'plain_text', text: part },
     });
   }
 
@@ -342,5 +340,5 @@ function splitContent(content: string, maxPerSection: number): string[] {
 
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
-  return s.slice(0, max) + '...';
+  return s.slice(0, max - 1) + '…';
 }

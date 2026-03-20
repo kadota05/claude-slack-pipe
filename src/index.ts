@@ -66,6 +66,30 @@ function waitForInit(session: PersistentSession, timeoutMs = 30000): Promise<voi
   });
 }
 
+async function slackViewsOpen(token: string | undefined, triggerId: string, view: any): Promise<any> {
+  const resp = await fetch('https://slack.com/api/views.open', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({ trigger_id: triggerId, view }),
+  });
+  return resp.json();
+}
+
+async function slackViewsPush(token: string | undefined, triggerId: string, view: any): Promise<any> {
+  const resp = await fetch('https://slack.com/api/views.push', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify({ trigger_id: triggerId, view }),
+  });
+  return resp.json();
+}
+
 async function main(): Promise<void> {
   // Circuit breaker — prevent crash loops under launchd
   if (process.env.MANAGED_BY_LAUNCHD) {
@@ -960,9 +984,12 @@ async function main(): Promise<void> {
       }
       modal.private_metadata = threadTs;
 
-      await app.client.views.open({ trigger_id: body.trigger_id, view: modal });
+      const openResp = await slackViewsOpen(app.client.token, body.trigger_id, modal);
+      if (!openResp.ok) {
+        logger.error(`[file-modal] views.open failed: ${openResp.error} | detail: ${JSON.stringify(openResp.response_metadata?.messages || [])} | view_json_length: ${JSON.stringify(modal).length}`);
+      }
     } catch (err: any) {
-      logger.error(`[file-modal] Error opening file modal`, { filePath, error: err?.message || String(err), data: JSON.stringify(err?.data || err?.response?.data || {}).substring(0, 500) });
+      logger.error(`[file-modal] Error opening file modal`, { filePath, error: err?.message || String(err) });
       const errorMsg = err?.code === 'ENOENT'
         ? `ファイルが見つかりません: \`${filePath}\``
         : `ファイル表示エラー: ${err?.message || 'unknown'}`;
@@ -975,7 +1002,7 @@ async function main(): Promise<void> {
           text: { type: 'mrkdwn', text: errorMsg },
         }],
       };
-      await app.client.views.open({ trigger_id: body.trigger_id, view: errorModal });
+      await slackViewsOpen(app.client.token, body.trigger_id, errorModal);
     }
   });
 
@@ -1010,7 +1037,7 @@ async function main(): Promise<void> {
       const lines = content.split('\n');
       const chunk = lines.slice(startLine - 1, endLine).join('\n');
       const modal = buildFileChunkModal(filePath, chunk, startLine, endLine);
-      await app.client.views.push({ trigger_id: body.trigger_id, view: modal });
+      await slackViewsPush(app.client.token, body.trigger_id, modal);
     } catch {
       const modal = {
         type: 'modal',
@@ -1021,7 +1048,7 @@ async function main(): Promise<void> {
           text: { type: 'mrkdwn', text: `ファイルが見つかりません: \`${filePath}\`` },
         }],
       };
-      await app.client.views.push({ trigger_id: body.trigger_id, view: modal });
+      await slackViewsPush(app.client.token, body.trigger_id, modal);
     }
   });
 

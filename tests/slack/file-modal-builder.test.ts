@@ -8,7 +8,8 @@ describe('buildFileContentModal', () => {
     expect(modal.title.text).toContain('index.ts');
     const textBlocks = modal.blocks.filter((b: any) => b.type === 'section');
     expect(textBlocks.length).toBeGreaterThan(0);
-    expect(textBlocks[0].text.text).toContain('```');
+    expect(textBlocks[0].text.type).toBe('plain_text');
+    expect(textBlocks[0].text.text).toContain('console.log');
   });
 
   it('splits long content into multiple sections', () => {
