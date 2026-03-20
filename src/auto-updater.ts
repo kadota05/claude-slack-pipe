@@ -1,8 +1,11 @@
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { logger } from './utils/logger.js';
 import type { SessionCoordinator } from './bridge/session-coordinator.js';
+
+const UPDATE_NOTIFY_FILE = path.join(os.homedir(), '.claude-slack-pipe', 'auto-update-notify.json');
 
 interface AutoUpdaterOptions {
   sessionCoordinator: SessionCoordinator;
@@ -20,6 +23,7 @@ export class AutoUpdater {
   private readonly projectRoot: string;
   private timer: ReturnType<typeof setInterval> | null = null;
   private _pendingUpdate = false;
+  private blockedMessages: Array<{ channel: string; ts: string }> = [];
 
   constructor(options: AutoUpdaterOptions) {
     this.coordinator = options.sessionCoordinator;
@@ -59,6 +63,10 @@ export class AutoUpdater {
     return this._pendingUpdate;
   }
 
+  addBlockedMessage(channel: string, ts: string): void {
+    this.blockedMessages.push({ channel, ts });
+  }
+
   async onSessionIdle(): Promise<void> {
     if (!this._pendingUpdate) return;
     if (!this.coordinator.isAllIdle()) return;
@@ -85,6 +93,11 @@ export class AutoUpdater {
 
   private fetchAndCompare(): boolean {
     try {
+      if (!this.isOnMainBranch()) {
+        logger.warn('[AutoUpdater] No longer on main branch, skipping update check');
+        this.stop();
+        return false;
+      }
       const opts = { cwd: this.projectRoot, timeout: 60_000 };
       logger.info('[AutoUpdater] Running fetchAndCompare', { cwd: this.projectRoot });
       execSync('git fetch origin main', opts);
@@ -118,6 +131,13 @@ export class AutoUpdater {
       if (changedFiles.includes('package-lock.json')) {
         logger.info('[AutoUpdater] package-lock.json changed, running npm install');
         execSync('npm install', { cwd: this.projectRoot, timeout: 120_000 });
+      }
+
+      // Save blocked messages so startup can update them to "complete"
+      if (this.blockedMessages.length > 0) {
+        try {
+          fs.writeFileSync(UPDATE_NOTIFY_FILE, JSON.stringify({ messages: this.blockedMessages }));
+        } catch { /* best-effort */ }
       }
 
       logger.info('[AutoUpdater] Update applied, shutting down for restart');
