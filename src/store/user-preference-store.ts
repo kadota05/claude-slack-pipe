@@ -5,7 +5,7 @@ import { logger } from '../utils/logger.js';
 import type { UserPreferences, UserPreferenceFile } from '../types.js';
 
 const FILE_NAME = 'user-preferences.json';
-const DEFAULT_PREFS: UserPreferences = { defaultModel: 'opus', activeDirectoryId: null };
+const DEFAULT_PREFS: UserPreferences = { defaultModel: 'opus', activeDirectoryId: null, starredDirectoryIds: [] };
 
 export class UserPreferenceStore {
   private readonly filePath: string;
@@ -17,7 +17,8 @@ export class UserPreferenceStore {
   }
 
   get(userId: string): UserPreferences {
-    return this.data.users[userId] ?? { ...DEFAULT_PREFS };
+    const stored = this.data.users[userId];
+    return stored ? { ...DEFAULT_PREFS, ...stored } : { ...DEFAULT_PREFS };
   }
 
   setModel(userId: string, model: string): void {
@@ -34,8 +35,22 @@ export class UserPreferenceStore {
 
   private ensureUser(userId: string): void {
     if (!this.data.users[userId]) {
-      this.data.users[userId] = { ...DEFAULT_PREFS };
+      this.data.users[userId] = { ...DEFAULT_PREFS, starredDirectoryIds: [] };
+    } else if (!this.data.users[userId].starredDirectoryIds) {
+      this.data.users[userId].starredDirectoryIds = [];
     }
+  }
+
+  toggleStar(userId: string, directoryId: string): void {
+    this.ensureUser(userId);
+    const prefs = this.data.users[userId];
+    const idx = prefs.starredDirectoryIds.indexOf(directoryId);
+    if (idx >= 0) {
+      prefs.starredDirectoryIds.splice(idx, 1);
+    } else {
+      prefs.starredDirectoryIds.push(directoryId);
+    }
+    this.save();
   }
 
   private load(): UserPreferenceFile {

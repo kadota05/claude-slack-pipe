@@ -388,6 +388,7 @@ export interface SystemInitEvent extends StreamEvent {
 export interface UserPreferences {
   defaultModel: string;
   activeDirectoryId: string | null;
+  starredDirectoryIds: string[];
 }
 
 export interface UserPreferenceFile {

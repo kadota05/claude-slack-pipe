@@ -46,4 +46,39 @@ describe('UserPreferenceStore', () => {
     expect(store.get('U001').defaultModel).toBe('opus');
     expect(store.get('U002').defaultModel).toBe('haiku');
   });
+
+  it('returns empty starredDirectoryIds for unknown user', () => {
+    const prefs = store.get('U_UNKNOWN');
+    expect(prefs.starredDirectoryIds).toEqual([]);
+  });
+
+  it('toggleStar adds and removes directory', () => {
+    store.toggleStar('U001', 'dir-a');
+    expect(store.get('U001').starredDirectoryIds).toEqual(['dir-a']);
+
+    store.toggleStar('U001', 'dir-b');
+    expect(store.get('U001').starredDirectoryIds).toEqual(['dir-a', 'dir-b']);
+
+    store.toggleStar('U001', 'dir-a');
+    expect(store.get('U001').starredDirectoryIds).toEqual(['dir-b']);
+  });
+
+  it('toggleStar persists across instances', () => {
+    store.toggleStar('U001', 'dir-x');
+    const store2 = new UserPreferenceStore(tmpDir);
+    expect(store2.get('U001').starredDirectoryIds).toEqual(['dir-x']);
+  });
+
+  it('backfills starredDirectoryIds for existing user without it', () => {
+    store.setModel('U001', 'haiku');
+    const filePath = path.join(tmpDir, 'user-preferences.json');
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    delete data.users['U001'].starredDirectoryIds;
+    fs.writeFileSync(filePath, JSON.stringify(data));
+
+    const store2 = new UserPreferenceStore(tmpDir);
+    const prefs = store2.get('U001');
+    expect(prefs.starredDirectoryIds).toEqual([]);
+    expect(prefs.defaultModel).toBe('haiku');
+  });
 });
