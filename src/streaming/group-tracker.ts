@@ -226,6 +226,7 @@ export class GroupTracker {
     // Move to completedGroups and remove from Map
     const cg: CompletedGroup = {
       category: 'subagent',
+      agentToolUseId,
       agentDescription: agent.agentDescription,
       agentId: agent.agentId,
       agentSteps: [...agent.agentSteps],
@@ -278,6 +279,7 @@ export class GroupTracker {
       }
       const cg: CompletedGroup = {
         category: 'subagent',
+        agentToolUseId: agent.agentToolUseId,
         agentDescription: agent.agentDescription,
         agentId: agent.agentId,
         agentSteps: [...agent.agentSteps],
@@ -390,8 +392,8 @@ export class GroupTracker {
       if (cg.category === 'tool' && cg.tools && cg.tools.length > 0) {
         return cg.tools[0].toolUseId;
       }
-      if (cg.category === 'subagent' && cg.agentSteps && cg.agentSteps.length > 0) {
-        return cg.agentSteps[0].toolUseId;
+      if (cg.category === 'subagent' && cg.agentToolUseId) {
+        return cg.agentToolUseId;
       }
     }
 

@@ -160,6 +160,7 @@ export interface CompletedGroup {
   tools?: GroupToolInfo[];
   totalDuration?: number;
   // subagent
+  agentToolUseId?: string;
   agentDescription?: string;
   agentId?: string;
   agentSteps?: GroupStepInfo[];
