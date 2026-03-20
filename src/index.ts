@@ -925,7 +925,7 @@ async function main(): Promise<void> {
   });
 
   // --- File Content Modal Action ---
-  app.action('view_file_content', async ({ ack, body }: any) => {
+  app.action(/^view_file_content/, async ({ ack, body }: any) => {
     await ack();
     const filePath = body.actions?.[0]?.value;
     if (!filePath) return;
@@ -936,6 +936,7 @@ async function main(): Promise<void> {
 
     const resolved = path.resolve(cwd, filePath);
     const normalizedCwd = path.resolve(cwd) + path.sep;
+    logger.info(`[file-modal] filePath=${filePath}, cwd=${cwd}, resolved=${resolved}`);
 
     if (!resolved.startsWith(normalizedCwd) && resolved !== path.resolve(cwd)) {
       logger.warn(`Path traversal blocked: ${filePath}`);
