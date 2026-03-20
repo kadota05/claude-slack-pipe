@@ -15,4 +15,9 @@ export class ActionHandler {
     this.userPrefStore.setDirectory(userId, directoryId);
     await this.homeTab.publishHomeTab(userId);
   }
+
+  async handleToggleStar(userId: string, directoryId: string): Promise<void> {
+    this.userPrefStore.toggleStar(userId, directoryId);
+    await this.homeTab.publishHomeTab(userId);
+  }
 }

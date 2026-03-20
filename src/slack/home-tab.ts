@@ -49,6 +49,7 @@ export class HomeTabHandler {
       directories,
       recentSessions,
       restartStatus,
+      starredDirectoryIds: prefs.starredDirectoryIds ?? [],
     });
 
     try {

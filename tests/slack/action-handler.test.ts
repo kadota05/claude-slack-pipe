@@ -11,6 +11,7 @@ describe('ActionHandler', () => {
     mockUserPrefStore = {
       setModel: vi.fn(),
       setDirectory: vi.fn(),
+      toggleStar: vi.fn(),
     };
     mockCoordinator = {
       broadcastControl: vi.fn(),
@@ -36,6 +37,14 @@ describe('ActionHandler', () => {
     it('updates preference and refreshes home tab', async () => {
       await handler.handleSetDirectory('U001', 'dir-123');
       expect(mockUserPrefStore.setDirectory).toHaveBeenCalledWith('U001', 'dir-123');
+      expect(mockHomeTab.publishHomeTab).toHaveBeenCalledWith('U001');
+    });
+  });
+
+  describe('handleToggleStar', () => {
+    it('toggles star and refreshes home tab', async () => {
+      await handler.handleToggleStar('U001', 'dir-abc');
+      expect(mockUserPrefStore.toggleStar).toHaveBeenCalledWith('U001', 'dir-abc');
       expect(mockHomeTab.publishHomeTab).toHaveBeenCalledWith('U001');
     });
   });

@@ -760,6 +760,15 @@ async function main(): Promise<void> {
     }
   });
 
+  app.action('toggle_star_directory', async ({ ack, body }: any) => {
+    await ack();
+    const userId = body.user.id;
+    const directoryId = body.actions?.[0]?.value;
+    if (directoryId) {
+      await actionHandler.handleToggleStar(userId, directoryId);
+    }
+  });
+
   app.action('home_restart_bridge', async ({ ack, body }: any) => {
     await ack();
     const userId = body.user.id;
