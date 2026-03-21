@@ -18,6 +18,9 @@
   "oauth_config": {
     "scopes": {
       "bot": [
+        "channels:join",
+        "channels:manage",
+        "channels:read",
         "chat:write",
         "im:history",
         "im:read",
