@@ -32,6 +32,7 @@ import { RecentSessionScanner } from './store/recent-session-scanner.js';
 import { TunnelManager } from './streaming/tunnel-manager.js';
 import { NetworkWatcher } from './utils/network-watcher.js';
 import { AutoUpdater } from './auto-updater.js';
+import { buildBridgeContext, migrateTemplates } from './bridge/bridge-context.js';
 
 /**
  * Wait for CLI to initialize (starting → processing or idle).
@@ -139,6 +140,14 @@ async function main(): Promise<void> {
 
   // Ensure data directory exists
   fs.mkdirSync(config.dataDir, { recursive: true });
+
+  // Migrate templates and build bridge context
+  const templatesDir = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'templates');
+  await migrateTemplates(config.dataDir, templatesDir);
+  const bridgeContext = await buildBridgeContext(config.dataDir);
+  if (bridgeContext) {
+    logger.info(`Bridge context loaded (${bridgeContext.length} chars)`);
+  }
 
   const app = createApp(config);
 
@@ -375,6 +384,7 @@ async function main(): Promise<void> {
           model: prefs.defaultModel,
           projectPath,
           isResume: false,
+          bridgeContext,
         });
 
         // Register in index
@@ -434,6 +444,7 @@ async function main(): Promise<void> {
               model: preferredModel,
               projectPath: indexEntry.projectPath,
               isResume: true,
+              bridgeContext,
             });
           } else {
             session = existingSession;
@@ -446,6 +457,7 @@ async function main(): Promise<void> {
             model: preferredModel,
             projectPath: indexEntry.projectPath,
             isResume: true,
+            bridgeContext,
           });
         }
 
