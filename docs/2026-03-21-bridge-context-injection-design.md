@@ -21,15 +21,17 @@ Claude CLIの `--append-system-prompt` オプションを使い、プロセスsp
 ### 変更前
 
 ```
+// 擬似コード（実際はstream-json形式のオブジェクトをwriteStdinに渡す）
 spawn('claude', ['-p', '--input-format', 'stream-json', ...])
 
 sendInitialPrompt(prompt):
-  writeStdin(SLACK_CONTEXT_PREFIX + '\n' + prompt)
+  writeStdin({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: SLACK_CONTEXT_PREFIX + '\n' + prompt }] } })
 ```
 
 ### 変更後
 
 ```
+// 擬似コード
 const bridgeContext = await buildBridgeContext(dataDir)
 
 spawn('claude', [
@@ -39,7 +41,8 @@ spawn('claude', [
 ])
 
 sendInitialPrompt(prompt):
-  writeStdin(prompt)  // プロンプトのみ、prefix付加なし
+  writeStdin({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } })
+  // プロンプトのみ、prefix付加なし
 ```
 
 ### bridgeContextの構造
@@ -67,17 +70,45 @@ The following bridge skills are available for use with the Skill tool:
 export async function buildBridgeContext(dataDir: string): Promise<string>
 ```
 
-#### frontmatterパース
+#### frontmatterパース仕様
 
-外部ライブラリを使わず自前パース。`---` で囲まれたYAML部分から `name` と `description` を正規表現で抽出する。
+外部ライブラリを使わず自前パース。以下のルールに従う:
+
+- ファイル先頭が `---` で始まること（先頭以外の `---` は無視）
+- 2つ目の `---` までをfrontmatter領域とする
+- `name:` と `description:` の行を正規表現で抽出
+- 値のクォート（`"` / `'`）は除去する
+- 複数行descriptionは非対応（1行のみ）
+
+パース例:
+```markdown
+---
+name: Slackチャネル投稿セットアップ
+description: 新規Slack投稿の仕組みを一式セットアップする
+---
+```
+→ `{ name: "Slackチャネル投稿セットアップ", description: "新規Slack投稿の仕組みを一式セットアップする" }`
+
+```markdown
+---
+name: "Quoted Name"
+description: 'Single quoted desc'
+---
+```
+→ `{ name: "Quoted Name", description: "Single quoted desc" }`
+
+```markdown
+This file has no frontmatter
+```
+→ スキップ
 
 ### `templates/CLAUDE.md`
 
-現在の `SLACK_CONTEXT_PREFIX` の内容を移植。セットアップ時に `~/.claude-slack-pipe/CLAUDE.md` にコピーされる。
+現在の `SLACK_CONTEXT_PREFIX` の内容を移植。セットアップ時およびマイグレーション時に `~/.claude-slack-pipe/CLAUDE.md` にコピーされる。
 
 ### `templates/skills/`
 
-Bridge専用スキルファイルを同梱。セットアップ時に `~/.claude-slack-pipe/skills/` にコピーされる。
+Bridge専用スキルファイルを同梱。セットアップ時およびマイグレーション時に `~/.claude-slack-pipe/skills/` にコピーされる。
 
 ```
 templates/
@@ -98,7 +129,11 @@ templates/
 
 ### `src/bridge/slack-context.ts`
 
-廃止（ファイル削除）。他に参照箇所がないことを確認の上で削除。
+廃止（ファイル削除）。
+
+### `src/store/recent-session-scanner.ts`
+
+`SLACK_CONTEXT_PREFIX` をimportして `stripSlackContext()` で使用している。`--append-system-prompt` 方式ではプロンプト本文にprefixが付加されなくなるため、`stripSlackContext()` 自体が不要になる。この関数とimportを削除し、呼び出し元も修正する。
 
 ### `.claude/skills/setup.md`
 
@@ -124,12 +159,28 @@ templates/
 | bridgeContextが空 | `--append-system-prompt` をargsに含めない |
 | frontmatterに `---` がない | スキップ |
 | name または description がない | スキップ |
+| bridgeContextがARG_MAX超過 | 警告ログ、注入スキップ。macOSのARG_MAXは約262,144バイト。現実的には問題にならないが、CLAUDE.mdが巨大な場合に備える |
 
-## 後方互換
+## 後方互換とマイグレーション
 
-- `~/.claude-slack-pipe/CLAUDE.md` が存在しない → 注入スキップ
-- `~/.claude-slack-pipe/skills/` が存在しない → スキル一覧なし
-- 両方存在しない → `--append-system-prompt` 自体をargsに含めない（現状のハードコードも無くなるため、セットアップ未実行のユーザーはBridge Contextなしで動作する）
+### 新規ユーザー
+
+セットアップ時に `templates/` から自動コピーされるため、対応不要。
+
+### 既存ユーザー
+
+Bridge起動時に `~/.claude-slack-pipe/CLAUDE.md` が存在しない場合、プロジェクトディレクトリ内の `templates/CLAUDE.md` から自動コピーするマイグレーションを実行する。`skills/` ディレクトリについても同様。
+
+これにより、既存ユーザーもアップデート後の初回起動で自動的にBridge Contextが有効になる。
+
+マイグレーションロジックの配置場所: `src/bridge/bridge-context.ts` 内の `buildBridgeContext()` の先頭、またはBridge初期化フロー内。
+
+### マイグレーションルール
+
+- `CLAUDE.md` が存在しない → テンプレからコピー
+- `CLAUDE.md` が既に存在する → 上書きしない（ユーザーのカスタマイズを尊重）
+- `skills/` ディレクトリが存在しない → テンプレから全ファイルをコピー
+- `skills/` が存在するが一部ファイルが欠けている → 欠けているファイルのみコピー（既存ファイルは上書きしない）
 
 ## テンプレートとセットアップ
 
@@ -140,4 +191,4 @@ templates/CLAUDE.md           → ~/.claude-slack-pipe/CLAUDE.md
 templates/skills/*.md         → ~/.claude-slack-pipe/skills/
 ```
 
-新規ユーザーはセットアップするだけでBridgeスキルが使える。既存ユーザーは再セットアップまたは手動コピーで対応。
+新規ユーザーはセットアップするだけでBridgeスキルが使える。既存ユーザーは初回起動時の自動マイグレーションで対応。
