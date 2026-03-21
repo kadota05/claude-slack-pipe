@@ -342,6 +342,7 @@ export interface SessionStartParams {
   model: string;
   projectPath: string;
   isResume: boolean;
+  bridgeContext?: string;
 }
 
 export interface ControlMessage {

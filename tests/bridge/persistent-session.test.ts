@@ -233,6 +233,51 @@ describe('PersistentSession', () => {
     );
   });
 
+  it('includes --append-system-prompt when bridgeContext is provided', () => {
+    const sessionWithCtx = new PersistentSession({
+      sessionId: 'ctx-test',
+      model: 'sonnet',
+      projectPath: '/tmp/test',
+      isResume: false,
+      bridgeContext: 'Bridge instructions here',
+    });
+    sessionWithCtx.spawn();
+    const args = mockedSpawn.mock.calls[0][1] as string[];
+    expect(args).toContain('--append-system-prompt');
+    const idx = args.indexOf('--append-system-prompt');
+    expect(args[idx + 1]).toBe('Bridge instructions here');
+  });
+
+  it('does not include --append-system-prompt when bridgeContext is empty', () => {
+    const sessionNoCtx = new PersistentSession({
+      sessionId: 'no-ctx-test',
+      model: 'sonnet',
+      projectPath: '/tmp/test',
+      isResume: false,
+      bridgeContext: '',
+    });
+    sessionNoCtx.spawn();
+    const args = mockedSpawn.mock.calls[0][1] as string[];
+    expect(args).not.toContain('--append-system-prompt');
+  });
+
+  it('does not include --append-system-prompt when bridgeContext is undefined', () => {
+    session.spawn();
+    const args = mockedSpawn.mock.calls[0][1] as string[];
+    expect(args).not.toContain('--append-system-prompt');
+  });
+
+  it('sendInitialPrompt sends prompt without prefix', () => {
+    session.spawn();
+    session.sendInitialPrompt('Hello from Slack');
+    expect(mockProc.stdin.write).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'text', text: 'Hello from Slack' }] },
+      }) + '\n'
+    );
+  });
+
   it('stops keep_alive when processing', () => {
     session.spawn();
     mockProc.stdout.emit('data', Buffer.from(

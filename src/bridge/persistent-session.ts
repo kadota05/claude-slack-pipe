@@ -2,7 +2,6 @@
 import { EventEmitter } from 'node:events';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { logger } from '../utils/logger.js';
-import { SLACK_CONTEXT_PREFIX } from './slack-context.js';
 import type {
   SessionStartParams,
   SessionState,
@@ -113,7 +112,7 @@ export class PersistentSession extends EventEmitter {
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: SLACK_CONTEXT_PREFIX + '\n' + prompt }],
+        content: [{ type: 'text', text: prompt }],
       },
     });
     logger.info(`[${this.sessionId}] initial prompt written to stdin (before init)`);
@@ -190,9 +189,12 @@ export class PersistentSession extends EventEmitter {
       '--verbose',
       '--model', this.params.model,
       '--permission-mode', 'bypassPermissions',
-      // No budget limit — run without --max-budget-usd
       '--replay-user-messages',
     ];
+
+    if (this.params.bridgeContext) {
+      args.push('--append-system-prompt', this.params.bridgeContext);
+    }
 
     if (this.params.isResume) {
       args.push('-r', this.params.sessionId);
