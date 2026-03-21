@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { buildBridgeContext, parseFrontmatter } from '../../src/bridge/bridge-context.js';
+import { buildBridgeContext, migrateTemplates, parseFrontmatter } from '../../src/bridge/bridge-context.js';
 
 describe('parseFrontmatter', () => {
   it('parses unquoted name and description', () => {
@@ -147,5 +147,55 @@ description: Real skill
     fs.writeFileSync(path.join(tmpDir, 'CLAUDE.md'), hugeContent);
     const result = await buildBridgeContext(tmpDir);
     expect(result).toBe('');
+  });
+});
+
+describe('migrateTemplates', () => {
+  let tmpDataDir: string;
+  let tmpTemplatesDir: string;
+
+  beforeEach(() => {
+    tmpDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-data-'));
+    tmpTemplatesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-tpl-'));
+    fs.writeFileSync(path.join(tmpTemplatesDir, 'CLAUDE.md'), 'Default instructions');
+    fs.mkdirSync(path.join(tmpTemplatesDir, 'skills'));
+    fs.writeFileSync(path.join(tmpTemplatesDir, 'skills', 'skill-a.md'), 'Skill A content');
+    fs.writeFileSync(path.join(tmpTemplatesDir, 'skills', 'skill-b.md'), 'Skill B content');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDataDir, { recursive: true, force: true });
+    fs.rmSync(tmpTemplatesDir, { recursive: true, force: true });
+  });
+
+  it('copies CLAUDE.md when it does not exist', async () => {
+    await migrateTemplates(tmpDataDir, tmpTemplatesDir);
+    const content = fs.readFileSync(path.join(tmpDataDir, 'CLAUDE.md'), 'utf-8');
+    expect(content).toBe('Default instructions');
+  });
+
+  it('does not overwrite existing CLAUDE.md', async () => {
+    fs.writeFileSync(path.join(tmpDataDir, 'CLAUDE.md'), 'User customized');
+    await migrateTemplates(tmpDataDir, tmpTemplatesDir);
+    const content = fs.readFileSync(path.join(tmpDataDir, 'CLAUDE.md'), 'utf-8');
+    expect(content).toBe('User customized');
+  });
+
+  it('copies all skills when skills dir does not exist', async () => {
+    await migrateTemplates(tmpDataDir, tmpTemplatesDir);
+    const files = fs.readdirSync(path.join(tmpDataDir, 'skills'));
+    expect(files.sort()).toEqual(['skill-a.md', 'skill-b.md']);
+  });
+
+  it('copies only missing skills when skills dir partially exists', async () => {
+    fs.mkdirSync(path.join(tmpDataDir, 'skills'));
+    fs.writeFileSync(path.join(tmpDataDir, 'skills', 'skill-a.md'), 'Custom A');
+    await migrateTemplates(tmpDataDir, tmpTemplatesDir);
+    expect(fs.readFileSync(path.join(tmpDataDir, 'skills', 'skill-a.md'), 'utf-8')).toBe('Custom A');
+    expect(fs.readFileSync(path.join(tmpDataDir, 'skills', 'skill-b.md'), 'utf-8')).toBe('Skill B content');
+  });
+
+  it('handles missing templates dir gracefully', async () => {
+    await expect(migrateTemplates(tmpDataDir, '/nonexistent')).resolves.not.toThrow();
   });
 });

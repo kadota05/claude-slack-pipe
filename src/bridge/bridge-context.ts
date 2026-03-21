@@ -76,3 +76,48 @@ export async function buildBridgeContext(dataDir: string): Promise<string> {
 
   return result;
 }
+
+export async function migrateTemplates(dataDir: string, templatesDir: string): Promise<void> {
+  try {
+    await fs.access(templatesDir);
+  } catch {
+    return;
+  }
+
+  const destClaudeMd = path.join(dataDir, 'CLAUDE.md');
+  const srcClaudeMd = path.join(templatesDir, 'CLAUDE.md');
+  try {
+    await fs.access(destClaudeMd);
+  } catch {
+    try {
+      const content = await fs.readFile(srcClaudeMd, 'utf-8');
+      await fs.writeFile(destClaudeMd, content, 'utf-8');
+      logger.info(`Migrated CLAUDE.md to ${destClaudeMd}`);
+    } catch {
+      // Source doesn't exist — skip
+    }
+  }
+
+  const srcSkillsDir = path.join(templatesDir, 'skills');
+  const destSkillsDir = path.join(dataDir, 'skills');
+
+  try {
+    await fs.access(srcSkillsDir);
+  } catch {
+    return;
+  }
+
+  await fs.mkdir(destSkillsDir, { recursive: true });
+
+  const files = await fs.readdir(srcSkillsDir);
+  for (const file of files) {
+    const destPath = path.join(destSkillsDir, file);
+    try {
+      await fs.access(destPath);
+    } catch {
+      const content = await fs.readFile(path.join(srcSkillsDir, file), 'utf-8');
+      await fs.writeFile(destPath, content, 'utf-8');
+      logger.info(`Migrated skill: ${file}`);
+    }
+  }
+}
