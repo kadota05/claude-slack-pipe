@@ -125,7 +125,8 @@ templates/
 
 - `spawn()` メソッド: args配列に `--append-system-prompt` と bridgeContext文字列を追加。bridgeContextが空の場合はargsに含めない
 - `sendInitialPrompt()`: `SLACK_CONTEXT_PREFIX + '\n' +` を削除。promptだけ送信
-- import: `SLACK_CONTEXT_PREFIX` の import を削除、`buildBridgeContext` を追加
+- import: `SLACK_CONTEXT_PREFIX` の import を削除
+- bridgeContextは `SessionStartParams` 経由で文字列として受け取る（`buildBridgeContext` のimportは不要）
 
 ### `src/bridge/slack-context.ts`
 
@@ -141,10 +142,19 @@ templates/
 - `templates/CLAUDE.md` → `~/.claude-slack-pipe/CLAUDE.md` にコピー
 - `templates/skills/*.md` → `~/.claude-slack-pipe/skills/` に全てコピー
 
+### `src/index.ts`
+
+- Bridge起動時に `buildBridgeContext()` と `migrateTemplates()` を呼び出す
+- 生成した bridgeContext 文字列を全ての `coordinator.getOrCreateSession()` 呼び出しに渡す
+
+### `src/types.ts`
+
+- `SessionStartParams` に `bridgeContext?: string` を追加
+
 ## 変更しないファイル
 
 - `executor.ts` — `SLACK_CONTEXT_PREFIX` を参照していないことを確認
-- `index.ts` — 変更不要
+- `session-coordinator.ts` — `SessionStartParams` をそのまま `PersistentSession` に透過的に渡すため変更不要
 - `config.ts` — `dataDir` は既存のものを使う
 
 ## エラーハンドリング
