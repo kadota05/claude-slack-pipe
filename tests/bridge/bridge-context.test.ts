@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { parseFrontmatter } from '../../src/bridge/bridge-context.js';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { buildBridgeContext, parseFrontmatter } from '../../src/bridge/bridge-context.js';
 
 describe('parseFrontmatter', () => {
   it('parses unquoted name and description', () => {
@@ -64,5 +67,85 @@ name: Only name
 name: Broken
 description: No closing`;
     expect(parseFrontmatter(content)).toBeNull();
+  });
+});
+
+describe('buildBridgeContext', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-ctx-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns empty string when no CLAUDE.md and no skills dir', async () => {
+    const result = await buildBridgeContext(tmpDir);
+    expect(result).toBe('');
+  });
+
+  it('returns CLAUDE.md content when only CLAUDE.md exists', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'CLAUDE.md'), 'Bridge instructions here');
+    const result = await buildBridgeContext(tmpDir);
+    expect(result).toBe('Bridge instructions here');
+  });
+
+  it('returns CLAUDE.md + skills index when both exist', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'CLAUDE.md'), 'Instructions');
+    fs.mkdirSync(path.join(tmpDir, 'skills'));
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'test-skill.md'), `---
+name: Test Skill
+description: A test skill
+---
+
+Body`);
+    const result = await buildBridgeContext(tmpDir);
+    expect(result).toContain('Instructions');
+    expect(result).toContain('[Bridge Skills]');
+    expect(result).toContain('- Test Skill: A test skill');
+  });
+
+  it('returns only skills index when no CLAUDE.md', async () => {
+    fs.mkdirSync(path.join(tmpDir, 'skills'));
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'a.md'), `---
+name: Skill A
+description: Desc A
+---`);
+    const result = await buildBridgeContext(tmpDir);
+    expect(result).not.toContain('Instructions');
+    expect(result).toContain('- Skill A: Desc A');
+  });
+
+  it('skips skill files with invalid frontmatter', async () => {
+    fs.mkdirSync(path.join(tmpDir, 'skills'));
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'valid.md'), `---
+name: Valid
+description: Valid desc
+---`);
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'invalid.md'), 'No frontmatter');
+    const result = await buildBridgeContext(tmpDir);
+    expect(result).toContain('- Valid: Valid desc');
+    expect(result).not.toContain('invalid');
+  });
+
+  it('skips non-.md files in skills directory', async () => {
+    fs.mkdirSync(path.join(tmpDir, 'skills'));
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'notes.txt'), 'not a skill');
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'real.md'), `---
+name: Real
+description: Real skill
+---`);
+    const result = await buildBridgeContext(tmpDir);
+    expect(result).toContain('- Real: Real skill');
+    expect(result).not.toContain('notes');
+  });
+
+  it('returns empty string when context exceeds ARG_MAX_SAFE', async () => {
+    const hugeContent = 'x'.repeat(210_000);
+    fs.writeFileSync(path.join(tmpDir, 'CLAUDE.md'), hugeContent);
+    const result = await buildBridgeContext(tmpDir);
+    expect(result).toBe('');
   });
 });
