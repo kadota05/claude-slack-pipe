@@ -16,6 +16,7 @@ TaskCreateで以下の6つのタスクを作成する。各タスクに入ると
 3. Slack Workspace作成ガイド
 4. Slack App作成（マニフェスト使用）
 5. トークン取得・.env生成
+5b. Bridge Contextテンプレートコピー
 6. Bridge起動・動作確認
 
 タスクは必ず順番に実行し、前のタスクが完了するまで次に進まないこと。
@@ -208,6 +209,21 @@ LOG_LEVEL=info
 ```
 
 生成後「.envファイルを作成しました」と案内する。
+
+---
+
+## タスク5b: Bridge Context テンプレートのコピー
+
+以下のコマンドでBridge専用のCLAUDE.mdとスキルファイルをデータディレクトリにコピーする：
+
+```bash
+mkdir -p ~/.claude-slack-pipe/skills && cp templates/CLAUDE.md ~/.claude-slack-pipe/CLAUDE.md && cp templates/skills/*.md ~/.claude-slack-pipe/skills/ && echo "✅ Bridge context templates copied"
+```
+
+- `~/.claude-slack-pipe/CLAUDE.md` はBridge経由のセッションに自動注入される指示文
+- `~/.claude-slack-pipe/skills/` はBridge専用スキルファイル
+- これらはユーザーが自由にカスタマイズ可能
+- Bridge起動時にも自動マイグレーションされるが、セットアップ時に明示的にコピーしておく
 
 ---
 
