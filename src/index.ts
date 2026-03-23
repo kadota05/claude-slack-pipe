@@ -195,6 +195,7 @@ async function main(): Promise<void> {
 
   // --- Message Handler ---
   async function handleMessage(event: any): Promise<void> {
+    if (isShuttingDown) return;
     logger.info('[DEBUG] handleMessage called', { type: event.type, channel_type: event.channel_type, bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 50), user: event.user, ts: event.ts, client_msg_id: event.client_msg_id });
     if (event.channel_type !== 'im') { logger.info('[DEBUG] skipped: not im'); return; }
     if (event.bot_id || event.subtype) { logger.info('[DEBUG] skipped: bot_id or subtype', { bot_id: event.bot_id, subtype: event.subtype }); return; }
@@ -1276,6 +1277,18 @@ async function main(): Promise<void> {
     for (const entry of sessionIndexStore.getActive()) {
       coordinator.endSession(entry.cliSessionId);
     }
+    // Remove brain reactions from active messages (best-effort)
+    const reactionCleanups: Promise<void>[] = [];
+    for (const [sessionId, messageTs] of activeMessageTs) {
+      const entry = sessionIndexStore.get(sessionId);
+      if (entry) {
+        reactionCleanups.push(
+          reactionManager.removeProcessing(entry.channelId, messageTs).catch(() => {})
+        );
+      }
+    }
+    await Promise.allSettled(reactionCleanups);
+    activeMessageTs.clear();
     tunnelManager.stopAll();
     networkWatcher.stop();
     // Clear crash history on intentional restart so it doesn't trigger circuit breaker
