@@ -81,6 +81,16 @@ describe('extractLocalUrls', () => {
     const result = extractLocalUrls('No URLs here');
     expect(result).toEqual([]);
   });
+
+  it('extracts localhost URL without protocol (port required)', () => {
+    const result = extractLocalUrls('`localhost:8765/fun.html` で動いてます');
+    expect(result).toEqual([{ url: 'http://localhost:8765/fun.html', host: 'localhost', port: 8765 }]);
+  });
+
+  it('does not match bare localhost without port when no protocol', () => {
+    const result = extractLocalUrls('connect to localhost for details');
+    expect(result).toEqual([]);
+  });
 });
 
 describe('rewriteLocalUrls', () => {
@@ -128,5 +138,32 @@ describe('rewriteLocalUrls', () => {
       urlMap
     );
     expect(result).toContain('`localhost:5173/dashboard` （ <https://abc123.trycloudflare.com/dashboard|Slackからはこちら> ）');
+  });
+
+  it('does not double backticks when URL is already in backticks', () => {
+    const urlMap = new Map<string, string>([
+      ['http://localhost:8765/fun.html', 'https://abc123.trycloudflare.com/fun.html'],
+    ]);
+    const result = rewriteLocalUrls(
+      '`http://localhost:8765/fun.html` で動いてます',
+      urlMap
+    );
+    expect(result).toBe(
+      '`localhost:8765/fun.html` （ <https://abc123.trycloudflare.com/fun.html|Slackからはこちら> ） で動いてます'
+    );
+    expect(result).not.toContain('``');
+  });
+
+  it('rewrites URL without protocol in backticks', () => {
+    const urlMap = new Map<string, string>([
+      ['http://localhost:8765/fun.html', 'https://abc123.trycloudflare.com/fun.html'],
+    ]);
+    const result = rewriteLocalUrls(
+      '`localhost:8765/fun.html` で動いてます',
+      urlMap
+    );
+    expect(result).toBe(
+      '`localhost:8765/fun.html` （ <https://abc123.trycloudflare.com/fun.html|Slackからはこちら> ） で動いてます'
+    );
   });
 });

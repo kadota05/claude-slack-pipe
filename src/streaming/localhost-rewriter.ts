@@ -1,8 +1,12 @@
 // src/streaming/localhost-rewriter.ts
 
-// Matches local URLs, stopping at whitespace, parens, and Slack mrkdwn special chars (<, >, |)
-const LOCALHOST_URL_PATTERN =
-  /https?:\/\/(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|0\.0\.0\.0|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?[^\s)<>|]*/g;
+const LOCAL_HOST_NAMES = `(localhost|127\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|0\\.0\\.0\\.0|\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})`;
+const URL_TAIL = `[^\\s)<>|\`]*`;
+
+// With protocol: port is optional (defaults to 80)
+const WITH_PROTOCOL = new RegExp(`https?:\\/\\/${LOCAL_HOST_NAMES}(:\\d+)?${URL_TAIL}`, 'g');
+// Without protocol: port is required to avoid matching bare "localhost" in text
+const WITHOUT_PROTOCOL = new RegExp(`(?<![/\\w])${LOCAL_HOST_NAMES}(:\\d+)${URL_TAIL}`, 'g');
 
 export interface LocalUrl {
   url: string;
@@ -30,15 +34,21 @@ export function isPrivateIp(host: string): boolean {
 
 export function extractLocalUrls(text: string): LocalUrl[] {
   const results: LocalUrl[] = [];
-  const regex = new RegExp(LOCALHOST_URL_PATTERN.source, 'g');
+  const seen = new Set<string>();
 
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    const host = match[1];
-    if (!isPrivateIp(host)) continue;
+  for (const pattern of [WITH_PROTOCOL, WITHOUT_PROTOCOL]) {
+    const regex = new RegExp(pattern.source, 'g');
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      const host = match[1];
+      if (!isPrivateIp(host)) continue;
 
-    const port = match[2] ? parseInt(match[2].slice(1), 10) : 80;
-    results.push({ url: match[0], host, port });
+      const port = match[2] ? parseInt(match[2].slice(1), 10) : 80;
+      const url = match[0].startsWith('http') ? match[0] : `http://${match[0]}`;
+      if (seen.has(url)) continue;
+      seen.add(url);
+      results.push({ url, host, port });
+    }
   }
 
   return results;
@@ -67,11 +77,15 @@ export function rewriteLocalUrls(
     );
 
     // Then: replace bare occurrences (not inside mrkdwn links)
-    // Strip protocol to avoid Slack's auto-linking which breaks <url|text> mrkdwn links
+    // Consume surrounding backticks if present to avoid doubling them
+    // Single pass: match with-protocol OR without-protocol to avoid double replacement
     const displayUrl = originalUrl.replace(/^https?:\/\//, '');
+    const escapedDisplay = displayUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const replacement = `\`${displayUrl}\` （ <${tunnelUrl}|Slackからはこちら> ）`;
+
     result = result.replace(
-      new RegExp(`(?<![<|])${escaped}`, 'g'),
-      `\`${displayUrl}\` （ <${tunnelUrl}|Slackからはこちら> ）`
+      new RegExp(`\`?(?<![<|])(?:${escaped}|(?<![:/\\w])${escapedDisplay})\`?`, 'g'),
+      replacement
     );
   }
 
