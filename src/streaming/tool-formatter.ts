@@ -303,14 +303,10 @@ export function buildBundleCollapsedBlocks(config: BundleCollapsedConfig): Block
 
   return [
     {
-      type: 'context',
-      elements: [{ type: 'mrkdwn', text: parts.join('  ') }],
-    },
-    {
       type: 'actions',
       elements: [{
         type: 'button',
-        text: { type: 'plain_text', text: '詳細を見る' },
+        text: { type: 'plain_text', text: parts.join('  ') },
         action_id: `view_bundle:${config.sessionId}:${config.bundleKey}`,
       }],
     },
