@@ -14,7 +14,8 @@ export interface SlackMessageEvent {
 export type MessageClassification = 'command' | 'prompt' | 'ignore';
 
 export function classifyMessage(event: SlackMessageEvent): MessageClassification {
-  if (event.bot_id || event.subtype) return 'ignore';
+  if (event.bot_id) return 'ignore';
+  if (event.subtype && event.subtype !== 'file_share') return 'ignore';
   if (!event.text || event.text.trim() === '') return 'ignore';
 
   const parsed = parseCommand(event.text);
