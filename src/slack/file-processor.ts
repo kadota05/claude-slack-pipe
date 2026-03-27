@@ -88,6 +88,15 @@ export async function processFiles(
       continue;
     }
 
+    // Pre-check cumulative size before downloading
+    if (category !== 'text') {
+      totalBase64Bytes += file.size;
+      if (totalBase64Bytes > MAX_TOTAL_SIZE_BYTES) {
+        warnings.push(`Total file size exceeds 32MB limit. Skipping ${file.name} and remaining files.`);
+        break;
+      }
+    }
+
     let buffer: Buffer;
     try {
       buffer = await downloadFile(downloadUrl, botToken);
@@ -99,7 +108,8 @@ export async function processFiles(
 
     if (category === 'text') {
       try {
-        const text = buffer.toString('utf-8');
+        const decoder = new TextDecoder('utf-8', { fatal: true });
+        const text = decoder.decode(buffer);
         contentBlocks.push({ type: 'text', text: `${file.name}:\n${text}` });
       } catch {
         warnings.push(`${file.name}: could not decode as UTF-8 text.`);
@@ -109,12 +119,6 @@ export async function processFiles(
 
     // image or pdf — base64 encode
     const base64 = buffer.toString('base64');
-    totalBase64Bytes += buffer.length;
-
-    if (totalBase64Bytes > MAX_TOTAL_SIZE_BYTES) {
-      warnings.push(`Total file size exceeds 32MB limit. Skipping ${file.name} and remaining files.`);
-      break;
-    }
 
     if (category === 'image') {
       contentBlocks.push({
