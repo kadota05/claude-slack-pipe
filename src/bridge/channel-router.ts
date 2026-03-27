@@ -5,6 +5,7 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { logger } from '../utils/logger.js';
 import { downloadFilesToTemp } from './file-downloader.js';
+import { convertMarkdownToMrkdwn } from '../streaming/markdown-converter.js';
 
 export interface ChannelRouteEntry {
   folder: string;
@@ -175,15 +176,15 @@ export class ChannelRouter {
         return ts; // new progressTs
       }
       case 'message': {
-        await this.slackPostMessage(botToken, channelId, threadTs, event.text);
+        const mrkdwn = convertMarkdownToMrkdwn(event.text);
+        const blocks = [{ type: 'section', text: { type: 'mrkdwn', text: mrkdwn } }];
+        await this.slackPostMessage(botToken, channelId, threadTs, mrkdwn, blocks);
         return undefined;
       }
       case 'error': {
-        const blocks = [{
-          type: 'section',
-          text: { type: 'mrkdwn', text: `:warning: *${route.description}*\n${event.text}` },
-        }];
-        await this.slackPostMessage(botToken, channelId, threadTs, event.text, blocks);
+        const errText = `:warning: *${route.description}*\n${event.text}`;
+        const blocks = [{ type: 'section', text: { type: 'mrkdwn', text: errText } }];
+        await this.slackPostMessage(botToken, channelId, threadTs, errText, blocks);
         return undefined;
       }
     }
