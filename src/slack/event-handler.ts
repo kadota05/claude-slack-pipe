@@ -19,7 +19,7 @@ export function classifyMessage(event: SlackMessageEvent): MessageClassification
   if (event.subtype && event.subtype !== 'file_share') return 'ignore';
   if ((!event.text || event.text.trim() === '') && (!event.files || event.files.length === 0)) return 'ignore';
 
-  const parsed = parseCommand(event.text);
+  const parsed = parseCommand(event.text ?? '');
   if (parsed.type === 'bot_command' || parsed.type === 'passthrough') {
     return 'command';
   }
