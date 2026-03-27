@@ -9,15 +9,17 @@ export interface SlackMessageEvent {
   thread_ts?: string;
   bot_id?: string;
   subtype?: string;
+  files?: unknown[];
 }
 
 export type MessageClassification = 'command' | 'prompt' | 'ignore';
 
 export function classifyMessage(event: SlackMessageEvent): MessageClassification {
-  if (event.bot_id || event.subtype) return 'ignore';
-  if (!event.text || event.text.trim() === '') return 'ignore';
+  if (event.bot_id) return 'ignore';
+  if (event.subtype && event.subtype !== 'file_share') return 'ignore';
+  if ((!event.text || event.text.trim() === '') && (!event.files || event.files.length === 0)) return 'ignore';
 
-  const parsed = parseCommand(event.text);
+  const parsed = parseCommand(event.text ?? '');
   if (parsed.type === 'bot_command' || parsed.type === 'passthrough') {
     return 'command';
   }

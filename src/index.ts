@@ -13,6 +13,7 @@ import { BridgeCommandHandler } from './slack/bridge-commands.js';
 import { HomeTabHandler } from './slack/home-tab.js';
 import { ActionHandler } from './slack/action-handler.js';
 import { parseCommand } from './slack/command-parser.js';
+import { processFiles, type SlackFile } from './slack/file-processor.js';
 import { parsePermissionAction } from './slack/permission-prompt.js';
 import { sanitizeUserInput } from './utils/sanitizer.js';
 import { buildResponseFooter, buildThreadHeaderText } from './slack/block-builder.js';
@@ -198,7 +199,8 @@ async function main(): Promise<void> {
     if (isShuttingDown) return;
     logger.info('[DEBUG] handleMessage called', { type: event.type, channel_type: event.channel_type, bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 50), user: event.user, ts: event.ts, client_msg_id: event.client_msg_id });
     if (event.channel_type !== 'im') { logger.info('[DEBUG] skipped: not im'); return; }
-    if (event.bot_id || event.subtype) { logger.info('[DEBUG] skipped: bot_id or subtype', { bot_id: event.bot_id, subtype: event.subtype }); return; }
+    if (event.bot_id) { logger.info('[DEBUG] skipped: bot_id', { bot_id: event.bot_id }); return; }
+    if (event.subtype && event.subtype !== 'file_share') { logger.info('[DEBUG] skipped: subtype', { subtype: event.subtype }); return; }
 
     // Drop messages sent before this process started (e.g. during WiFi outage, crash)
     if (parseFloat(event.ts) < startedAt) {
@@ -214,10 +216,40 @@ async function main(): Promise<void> {
     const threadTs = event.thread_ts || event.ts;
     const text = sanitizeUserInput(event.text || '');
 
+    // Process file attachments if present
+    let fileContentBlocks: import('./types.js').StdinContentBlock[] | null = null;
+    if (event.files && Array.isArray(event.files) && event.files.length > 0) {
+      const botToken = process.env.SLACK_BOT_TOKEN!;
+      const result = await processFiles(event.files as SlackFile[], botToken);
+
+      // Post warnings for unsupported/failed files
+      if (result.warnings.length > 0) {
+        await app.client.chat.postMessage({
+          channel: channelId,
+          thread_ts: threadTs,
+          text: `⚠️ ${result.warnings.join('\n⚠️ ')}`,
+        });
+      }
+
+      if (result.contentBlocks.length === 0 && !text) {
+        // All files unsupported and no text — nothing to process
+        return;
+      }
+
+      if (result.contentBlocks.length > 0) {
+        // Build combined content blocks: files + optional text
+        fileContentBlocks = [...result.contentBlocks];
+        if (text) {
+          fileContentBlocks.push({ type: 'text', text });
+        }
+      }
+    }
+
     // --- Guard: block duplicate new-thread messages ---
     // Only for top-level messages (potential new threads), not thread replies.
     if (!event.thread_ts) {
-      const dedupKey = `${userId}:${text}`;
+      const fileIds = event.files?.map((f: any) => f.id).join(',') || '';
+      const dedupKey = `${userId}:${text}:${fileIds}`;
       const now = Date.now();
       const prev = recentNewThreadMessages.get(dedupKey);
       if (prev && (now - prev.time) < DEDUP_WINDOW_MS) {
@@ -353,7 +385,7 @@ async function main(): Promise<void> {
     }
 
     // For passthrough and plain_text: resolve session and send prompt
-    const prompt = parsed.type === 'passthrough' ? parsed.content : parsed.content;
+    const prompt: string | import('./types.js').StdinContentBlock[] = fileContentBlocks || (parsed.type === 'passthrough' ? parsed.content : parsed.content);
 
     // Resolve or create session
     // Acquire per-user lock to prevent race condition between findByThreadTs and register

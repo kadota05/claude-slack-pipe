@@ -6,6 +6,7 @@ import type {
   SessionStartParams,
   SessionState,
   StdinMessage,
+  StdinContentBlock,
   ControlMessage,
   StreamEvent,
 } from '../types.js';
@@ -83,16 +84,19 @@ export class PersistentSession extends EventEmitter {
   /**
    * Send prompt to an idle session (normal turn).
    */
-  sendPrompt(prompt: string): void {
+  sendPrompt(prompt: string | StdinContentBlock[]): void {
     if (this._state !== 'idle') {
       throw new Error(`Cannot send prompt in state: ${this._state}`);
     }
     this.clearIdleTimer();
+    const content: StdinContentBlock[] = typeof prompt === 'string'
+      ? [{ type: 'text', text: prompt }]
+      : prompt;
     this.writeStdin({
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: prompt }],
+        content,
       },
     });
     this.transition('processing');
@@ -103,16 +107,19 @@ export class PersistentSession extends EventEmitter {
    * Claude CLI stream-json mode requires a user message on stdin
    * before it emits the system init event.
    */
-  sendInitialPrompt(prompt: string): void {
+  sendInitialPrompt(prompt: string | StdinContentBlock[]): void {
     if (this._state !== 'starting') {
       throw new Error(`sendInitialPrompt only valid in starting state, got: ${this._state}`);
     }
     this._hasPendingInitialPrompt = true;
+    const content: StdinContentBlock[] = typeof prompt === 'string'
+      ? [{ type: 'text', text: prompt }]
+      : prompt;
     this.writeStdin({
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: prompt }],
+        content,
       },
     });
     logger.info(`[${this.sessionId}] initial prompt written to stdin (before init)`);
