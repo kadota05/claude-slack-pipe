@@ -118,7 +118,10 @@ export class ChannelRouter {
 
     logger.info(`Dispatching to ${route.channel}: ${route.description}`);
 
-    const child = spawn('tsx', args, {
+    // Use project-local tsx (launchd doesn't have PATH to global tsx)
+    const tsxBin = path.join(folder, 'node_modules', '.bin', 'tsx');
+
+    const child = spawn(tsxBin, args, {
       cwd: folder,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
