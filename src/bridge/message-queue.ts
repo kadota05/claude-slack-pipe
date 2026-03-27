@@ -1,7 +1,9 @@
 // src/bridge/message-queue.ts
+import type { StdinContentBlock } from '../types.js';
+
 export interface QueuedMessage {
   id: string;
-  prompt: string;
+  prompt: string | StdinContentBlock[];
   enqueuedAt?: number;
 }
 
