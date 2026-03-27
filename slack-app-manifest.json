@@ -18,9 +18,11 @@
   "oauth_config": {
     "scopes": {
       "bot": [
+        "channels:history",
         "channels:join",
         "channels:manage",
         "channels:read",
+        "channels:write.invites",
         "chat:write",
         "files:read",
         "im:history",
@@ -35,6 +37,7 @@
     "event_subscriptions": {
       "bot_events": [
         "app_home_opened",
+        "message.channels",
         "message.im",
         "reaction_added"
       ]

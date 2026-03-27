@@ -28,6 +28,7 @@ import type { BundleAction } from './streaming/types.js';
 import { SerialActionQueue } from './streaming/serial-action-queue.js';
 import { SessionJsonlReader } from './streaming/session-jsonl-reader.js';
 import { SubagentJsonlReader } from './streaming/subagent-jsonl-reader.js';
+import { ChannelRouter } from './bridge/channel-router.js';
 import { notifyText } from './streaming/notification-text.js';
 import { RecentSessionScanner } from './store/recent-session-scanner.js';
 import { TunnelManager } from './streaming/tunnel-manager.js';
@@ -150,6 +151,12 @@ async function main(): Promise<void> {
     logger.info(`Bridge context loaded (${bridgeContext.length} chars)`);
   }
 
+  // Initialize Channel Router
+  const slackMemoryPath = path.join(config.dataDir, 'slack-memory.json');
+  const channelRouter = new ChannelRouter(slackMemoryPath);
+  await channelRouter.load();
+  channelRouter.startWatching();
+
   const app = createApp(config);
 
   // Initialize stores
@@ -198,7 +205,31 @@ async function main(): Promise<void> {
   async function handleMessage(event: any): Promise<void> {
     if (isShuttingDown) return;
     logger.info('[DEBUG] handleMessage called', { type: event.type, channel_type: event.channel_type, bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 50), user: event.user, ts: event.ts, client_msg_id: event.client_msg_id });
-    if (event.channel_type !== 'im') { logger.info('[DEBUG] skipped: not im'); return; }
+    if (event.channel_type !== 'im') {
+      // Channel message — route via Channel Router
+      if (event.channel && channelRouter.hasRoute(event.channel)) {
+        // Skip bot's own messages
+        if (event.bot_id || event.subtype === 'bot_message') return;
+
+        const slackFiles = (event.files ?? []) as Array<{
+          id: string; name: string; mimetype: string; size: number;
+          url_private_download?: string;
+        }>;
+
+        channelRouter.dispatch({
+          text: event.text ?? '',
+          files: slackFiles,
+          botToken: config.slackBotToken,
+          userId: event.user ?? '',
+          channelId: event.channel,
+          threadTs: event.thread_ts ?? event.ts ?? '',
+          timestamp: event.ts ?? '',
+        }).catch((err) => {
+          logger.error('Channel dispatch error:', err);
+        });
+      }
+      return;
+    }
     if (event.bot_id) { logger.info('[DEBUG] skipped: bot_id', { bot_id: event.bot_id }); return; }
     if (event.subtype && event.subtype !== 'file_share') { logger.info('[DEBUG] skipped: subtype', { subtype: event.subtype }); return; }
 
