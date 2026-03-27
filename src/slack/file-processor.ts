@@ -53,7 +53,7 @@ function classifyFile(mimetype: string): FileCategory {
 
 const MAX_TOTAL_SIZE_BYTES = 32 * 1024 * 1024; // 32 MB
 
-async function downloadFile(
+export async function downloadFile(
   url: string,
   botToken: string,
 ): Promise<Buffer> {
