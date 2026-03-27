@@ -4,6 +4,11 @@ import path from 'node:path';
 import os from 'node:os';
 import { ChannelRouter } from '../../src/bridge/channel-router.js';
 
+// Mock fetch for Slack API calls (reactions, messages)
+vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+  json: () => Promise.resolve({ ok: true, ts: '1711000099.000000' }),
+}));
+
 // Mock child_process.spawn
 vi.mock('node:child_process', () => {
   const EventEmitter = require('node:events');
@@ -35,6 +40,10 @@ describe('ChannelRouter dispatch', () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ch-dispatch-'));
     memoryPath = path.join(tempDir, 'slack-memory.json');
     vi.clearAllMocks();
+    // Re-stub fetch after clearAllMocks
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      json: () => Promise.resolve({ ok: true, ts: '1711000099.000000' }),
+    });
   });
 
   afterEach(async () => {
@@ -68,7 +77,7 @@ describe('ChannelRouter dispatch', () => {
     });
 
     expect(spawn).toHaveBeenCalledWith(
-      'tsx',
+      '/home/user/dev/body-concierge/node_modules/.bin/tsx',
       expect.arrayContaining([
         '/home/user/dev/body-concierge/src/process-message.ts',
         '--text', 'チキンサラダ食べた',
@@ -109,7 +118,7 @@ describe('ChannelRouter dispatch', () => {
 
     expect(downloadFilesToTemp).toHaveBeenCalled();
     expect(spawn).toHaveBeenCalledWith(
-      'tsx',
+      '/home/user/dev/body-concierge/node_modules/.bin/tsx',
       expect.arrayContaining(['--files', '/tmp/test/photo.jpg']),
       expect.anything(),
     );
@@ -131,5 +140,46 @@ describe('ChannelRouter dispatch', () => {
     });
 
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('adds ⏳ reaction on dispatch and ✅ on success', async () => {
+    const entries = [
+      {
+        folder: '/home/user/dev/test-project',
+        description: 'Test',
+        channel: '#test',
+        channelId: 'C456',
+        handler: 'src/handler.ts',
+        createdAt: '2026-03-28',
+      },
+    ];
+    await fs.writeFile(memoryPath, JSON.stringify(entries));
+
+    const router = new ChannelRouter(memoryPath);
+    await router.load();
+
+    await router.dispatch({
+      text: 'test',
+      files: [],
+      botToken: 'xoxb-test',
+      userId: 'U123',
+      channelId: 'C456',
+      threadTs: '1711000000.000000',
+      timestamp: '1711000001.000000',
+    });
+
+    // Wait for exit event to fire
+    await new Promise((r) => setTimeout(r, 50));
+
+    const fetchCalls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    const reactionUrls = fetchCalls.map((c: any[]) => c[0]).filter((u: string) => u.includes('reactions'));
+
+    expect(reactionUrls).toContain('https://slack.com/api/reactions.add');
+    expect(reactionUrls).toContain('https://slack.com/api/reactions.remove');
+
+    // Check ⏳ was added first
+    const addCall = fetchCalls.find((c: any[]) => c[0].includes('reactions.add'));
+    const addBody = JSON.parse(addCall[1].body);
+    expect(addBody.name).toBe('hourglass_flowing_sand');
   });
 });
