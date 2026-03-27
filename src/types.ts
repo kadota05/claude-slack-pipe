@@ -355,9 +355,11 @@ export interface StdinUserMessage {
   type: 'user';
   message: {
     role: 'user';
-    content: Array<{ type: 'text'; text: string }>;
+    content: Array<{ type: 'text'; text: string } | ImageContent | DocumentContent>;
   };
 }
+
+export type StdinContentBlock = { type: 'text'; text: string } | ImageContent | DocumentContent;
 
 export type StdinMessage = ControlMessage | StdinUserMessage;
 
