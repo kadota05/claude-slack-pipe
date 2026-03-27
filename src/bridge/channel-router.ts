@@ -83,6 +83,18 @@ export class ChannelRouter {
     return this.routes.get(channelId);
   }
 
+  private async slackReaction(action: 'add' | 'remove', name: string, token: string, channel: string, timestamp: string): Promise<void> {
+    try {
+      await fetch(`https://slack.com/api/reactions.${action}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel, name, timestamp }),
+      });
+    } catch (err: any) {
+      logger.warn(`Failed to ${action} reaction ${name}:`, err.message);
+    }
+  }
+
   private expandTilde(filePath: string): string {
     if (filePath.startsWith('~/')) {
       return path.join(os.homedir(), filePath.slice(2));
@@ -118,6 +130,9 @@ export class ChannelRouter {
 
     logger.info(`Dispatching to ${route.channel}: ${route.description}`);
 
+    // Processing indicator — same ⏳ pattern as Bridge DM handling
+    await this.slackReaction('add', 'hourglass_flowing_sand', params.botToken, params.channelId, params.timestamp);
+
     // Use project-local tsx (launchd doesn't have PATH to global tsx)
     const tsxBin = path.join(folder, 'node_modules', '.bin', 'tsx');
 
@@ -131,11 +146,23 @@ export class ChannelRouter {
     child.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
     child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
 
+    child.on('error', async (err) => {
+      logger.error(`Channel handler ${route.channel} spawn error:`, err);
+      await this.slackReaction('remove', 'hourglass_flowing_sand', params.botToken, params.channelId, params.timestamp);
+      await this.slackReaction('add', 'x', params.botToken, params.channelId, params.timestamp);
+      if (tempDir) {
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+
     child.on('exit', async (code) => {
+      await this.slackReaction('remove', 'hourglass_flowing_sand', params.botToken, params.channelId, params.timestamp);
       if (code !== 0) {
         logger.error(`Channel handler ${route.channel} exited with code ${code}. stderr: ${stderr}`);
+        await this.slackReaction('add', 'x', params.botToken, params.channelId, params.timestamp);
       } else {
         logger.debug(`Channel handler ${route.channel} completed. stdout: ${stdout}`);
+        await this.slackReaction('add', 'white_check_mark', params.botToken, params.channelId, params.timestamp);
       }
       if (tempDir) {
         await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
