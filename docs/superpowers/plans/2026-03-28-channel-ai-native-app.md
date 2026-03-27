@@ -34,6 +34,9 @@
 | File | Reason |
 |---|---|
 | `src/bridge/channel-router.ts` | PersistentSession に統合のため廃止 |
+| `templates/skills/slack-channel-create.md` | bot招待 = init に置き換わり不要 |
+| `templates/skills/slack-channel-update.md` | チャネル内対話で育てる方式に置き換わり不要 |
+| `templates/skills/claude-p-automation-patterns.md` | 外部スクリプト方式廃止のため不要 |
 
 ---
 
@@ -1109,10 +1112,13 @@ git commit -m "feat: deactivate channel sessions on bot leave (member_left_chann
 
 ---
 
-### Task 10: ChannelRouter 削除とクリーンアップ
+### Task 10: ChannelRouter 削除と旧スキル・テンプレート削除
 
 **Files:**
 - Delete: `src/bridge/channel-router.ts`
+- Delete: `templates/skills/slack-channel-create.md`
+- Delete: `templates/skills/slack-channel-update.md`
+- Delete: `templates/skills/claude-p-automation-patterns.md`
 - Modify: `src/index.ts` (import 削除、初期化コード削除)
 
 - [ ] **Step 1: Remove ChannelRouter import and initialization from index.ts**
@@ -1137,21 +1143,42 @@ Run: `rm src/bridge/channel-router.ts`
 Run: `grep -rn 'slack-memory' src/`
 Expected: No matches (or only in deleted file)
 
-- [ ] **Step 4: Run full test suite**
+- [ ] **Step 4: Delete obsolete bridge skill templates**
+
+新アーキテクチャでは以下のスキルは不要:
+- `slack-channel-create.md` — bot招待 = init に置き換わった
+- `slack-channel-update.md` — チャネル内対話でアプリを育てる方式に置き換わった
+- `claude-p-automation-patterns.md` — 外部スクリプトで `claude -p` を使うパターンは廃止
+
+```bash
+rm templates/skills/slack-channel-create.md
+rm templates/skills/slack-channel-update.md
+rm templates/skills/claude-p-automation-patterns.md
+```
+
+既にユーザーの `~/.claude-slack-pipe/skills/` にコピー済みのファイルも削除:
+
+```bash
+rm -f ~/.claude-slack-pipe/skills/slack-channel-create.md
+rm -f ~/.claude-slack-pipe/skills/slack-channel-update.md
+rm -f ~/.claude-slack-pipe/skills/claude-p-automation-patterns.md
+```
+
+- [ ] **Step 5: Run full test suite**
 
 Run: `npx vitest run`
 Expected: All tests pass
 
-- [ ] **Step 5: Verify build**
+- [ ] **Step 6: Verify build**
 
 Run: `npx tsc --noEmit`
 Expected: No type errors
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add -A
-git commit -m "refactor: remove ChannelRouter, complete migration to PersistentSession"
+git commit -m "refactor: remove ChannelRouter and obsolete bridge skills"
 ```
 
 ---
