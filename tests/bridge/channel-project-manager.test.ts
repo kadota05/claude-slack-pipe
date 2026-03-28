@@ -77,9 +77,11 @@ describe('ChannelProjectManager', () => {
   });
 
   describe('buildContext', () => {
-    it('returns empty string when no skills', async () => {
+    it('returns SLACK_CONTEXT even when no skills', async () => {
       await manager.init('C_TEST123');
-      expect(await manager.buildContext('C_TEST123')).toBe('');
+      const ctx = await manager.buildContext('C_TEST123');
+      expect(ctx).toContain('Slack Bridge Context');
+      expect(ctx).toContain('mobile phone');
     });
 
     it('returns skill list when skills exist', async () => {

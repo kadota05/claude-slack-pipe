@@ -80,9 +80,11 @@ export class ChannelProjectManager {
     const projectPath = this.getProjectPath(channelId);
     const skills = await discoverSkills(path.join(projectPath, 'skills'));
 
-    if (skills.length === 0) return '';
-
-    const skillsList = skills.map(s => `- ${s.name}: ${s.description}`).join('\n');
-    return `${SLACK_CONTEXT}\n\n[Channel Skills]\nThe following skills are available for use with the Skill tool:\n\n${skillsList}`;
+    const parts = [SLACK_CONTEXT];
+    if (skills.length > 0) {
+      const skillsList = skills.map(s => `- ${s.name}: ${s.description}`).join('\n');
+      parts.push(`[Channel Skills]\nThe following skills are available for use with the Skill tool:\n\n${skillsList}`);
+    }
+    return parts.join('\n\n');
   }
 }
