@@ -28,7 +28,8 @@ import type { BundleAction } from './streaming/types.js';
 import { SerialActionQueue } from './streaming/serial-action-queue.js';
 import { SessionJsonlReader } from './streaming/session-jsonl-reader.js';
 import { SubagentJsonlReader } from './streaming/subagent-jsonl-reader.js';
-import { ChannelRouter } from './bridge/channel-router.js';
+import { ChannelProjectManager } from './bridge/channel-project-manager.js';
+import { ChannelScheduler } from './bridge/channel-scheduler.js';
 import { notifyText } from './streaming/notification-text.js';
 import { RecentSessionScanner } from './store/recent-session-scanner.js';
 import { TunnelManager } from './streaming/tunnel-manager.js';
@@ -151,11 +152,27 @@ async function main(): Promise<void> {
     logger.info(`Bridge context loaded (${bridgeContext.length} chars)`);
   }
 
-  // Initialize Channel Router
+  // Initialize Channel Project Manager
+  const channelTemplatesDir = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'templates', 'channel-project');
+  const channelProjectManager = new ChannelProjectManager(config.dataDir, channelTemplatesDir);
+
+  // Migrate existing channel routes from slack-memory.json
   const slackMemoryPath = path.join(config.dataDir, 'slack-memory.json');
-  const channelRouter = new ChannelRouter(slackMemoryPath);
-  await channelRouter.load();
-  channelRouter.startWatching();
+  try {
+    if (fs.existsSync(slackMemoryPath)) {
+      const routes = JSON.parse(fs.readFileSync(slackMemoryPath, 'utf-8'));
+      for (const route of routes) {
+        if (route.channelId && !channelProjectManager.exists(route.channelId)) {
+          await channelProjectManager.init(route.channelId);
+          logger.info(`Migrated channel route: ${route.channelId} (${route.description})`);
+        }
+      }
+      fs.renameSync(slackMemoryPath, slackMemoryPath + '.migrated');
+      logger.info('slack-memory.json migrated and renamed to .migrated');
+    }
+  } catch (err) {
+    logger.warn('Failed to migrate slack-memory.json:', err);
+  }
 
   const app = createApp(config);
 
@@ -205,33 +222,17 @@ async function main(): Promise<void> {
   async function handleMessage(event: any): Promise<void> {
     if (isShuttingDown) return;
     logger.info('[DEBUG] handleMessage called', { type: event.type, channel_type: event.channel_type, bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 50), user: event.user, ts: event.ts, client_msg_id: event.client_msg_id });
-    if (event.channel_type !== 'im') {
-      // Channel message — route via Channel Router
-      if (event.channel && channelRouter.hasRoute(event.channel)) {
-        // Skip bot's own messages
-        if (event.bot_id || event.subtype === 'bot_message') return;
+    const isChannel = event.channel_type !== 'im';
 
-        const slackFiles = (event.files ?? []) as Array<{
-          id: string; name: string; mimetype: string; size: number;
-          url_private_download?: string;
-        }>;
-
-        channelRouter.dispatch({
-          text: event.text ?? '',
-          files: slackFiles,
-          botToken: config.slackBotToken,
-          userId: event.user ?? '',
-          channelId: event.channel,
-          threadTs: event.thread_ts ?? event.ts ?? '',
-          timestamp: event.ts ?? '',
-        }).catch((err) => {
-          logger.error('Channel dispatch error:', err);
-        });
-      }
-      return;
+    if (isChannel) {
+      if (!channelProjectManager.exists(event.channel)) return;
+      if (event.bot_id || event.subtype === 'bot_message') return;
     }
-    if (event.bot_id) { logger.info('[DEBUG] skipped: bot_id', { bot_id: event.bot_id }); return; }
-    if (event.subtype && event.subtype !== 'file_share') { logger.info('[DEBUG] skipped: subtype', { subtype: event.subtype }); return; }
+
+    if (!isChannel) {
+      if (event.bot_id) { logger.info('[DEBUG] skipped: bot_id', { bot_id: event.bot_id }); return; }
+      if (event.subtype && event.subtype !== 'file_share') { logger.info('[DEBUG] skipped: subtype', { subtype: event.subtype }); return; }
+    }
 
     // Drop messages sent before this process started (e.g. during WiFi outage, crash)
     if (parseFloat(event.ts) < startedAt) {
@@ -317,6 +318,13 @@ async function main(): Promise<void> {
     logger.info('[DEBUG] auth check', { userId, allowed: auth.isAllowed(userId) });
     // Auth + Rate limit
     if (!auth.isAllowed(userId)) {
+      if (isChannel) {
+        await app.client.chat.postEphemeral({
+          channel: channelId,
+          user: userId,
+          text: '⛔ このbotを使う権限がありません。',
+        });
+      }
       logger.warn('Unauthorized user', { userId });
       return;
     }
@@ -330,8 +338,10 @@ async function main(): Promise<void> {
       return;
     }
 
-    // Parse command
-    const parsed = parseCommand(text);
+    // Parse command (channels skip command parsing)
+    const parsed = isChannel
+      ? { type: 'plain_text' as const, content: text }
+      : parseCommand(text);
 
     // Bot commands
     if (parsed.type === 'bot_command') {
@@ -419,11 +429,12 @@ async function main(): Promise<void> {
     const prompt: string | import('./types.js').StdinContentBlock[] = fileContentBlocks || (parsed.type === 'passthrough' ? parsed.content : parsed.content);
 
     // Resolve or create session
-    // Acquire per-user lock to prevent race condition between findByThreadTs and register
-    const prevLock = sessionCreationLocks.get(userId) || Promise.resolve();
+    // Acquire per-thread lock to prevent race condition between findByThreadTs and register
+    const lockKey = threadTs;
+    const prevLock = sessionCreationLocks.get(lockKey) || Promise.resolve();
     let releaseLock: () => void;
     const lockPromise = new Promise<void>((resolve) => { releaseLock = resolve; });
-    sessionCreationLocks.set(userId, prevLock.then(() => lockPromise));
+    sessionCreationLocks.set(lockKey, prevLock.then(() => lockPromise));
     await prevLock;
 
     let indexEntry: ReturnType<typeof sessionIndexStore.findByThreadTs>;
@@ -433,75 +444,110 @@ async function main(): Promise<void> {
       indexEntry = sessionIndexStore.findByThreadTs(threadTs);
 
       if (!indexEntry) {
-        // New session
-        const prefs = userPrefStore.get(userId);
-        const projects = projectStore.getProjects();
-        const activeDir = prefs.activeDirectoryId
-          ? projects.find((p) => p.id === prefs.activeDirectoryId)
-          : projects[0];
-        const projectPath = activeDir?.workingDirectory || process.cwd();
-        const sessionId = crypto.randomUUID();
+        let projectPath: string;
+        let sessionModel: string;
+        let sessionContext: string | undefined;
 
+        if (isChannel) {
+          projectPath = channelProjectManager.getProjectPath(event.channel);
+          try {
+            const settings = JSON.parse(fs.readFileSync(path.join(projectPath, '.claude', 'settings.json'), 'utf-8'));
+            sessionModel = settings.model || 'sonnet';
+          } catch {
+            sessionModel = 'sonnet';
+          }
+          sessionContext = await channelProjectManager.buildContext(event.channel);
+        } else {
+          const prefs = userPrefStore.get(userId);
+          const projects = projectStore.getProjects();
+          const activeDir = prefs.activeDirectoryId
+            ? projects.find((p) => p.id === prefs.activeDirectoryId)
+            : projects[0];
+          projectPath = activeDir?.workingDirectory || process.cwd();
+          sessionModel = prefs.defaultModel;
+          sessionContext = bridgeContext;
+        }
+
+        const sessionId = crypto.randomUUID();
         session = await coordinator.getOrCreateSession({
           sessionId,
-          userId,
-          model: prefs.defaultModel,
+          userId: isChannel ? channelId : userId,
+          model: sessionModel,
           projectPath,
           isResume: false,
-          bridgeContext,
+          bridgeContext: sessionContext,
+          maxAliveOverride: isChannel ? 3 : undefined,
         });
 
-        // Register in index
         sessionIndexStore.register({
           cliSessionId: sessionId,
           threadTs,
           channelId,
-          userId,
+          userId: isChannel ? channelId : userId,
           projectPath,
           name: text.substring(0, 50),
-          model: prefs.defaultModel,
+          model: sessionModel,
           status: 'active',
           createdAt: new Date().toISOString(),
           lastActiveAt: new Date().toISOString(),
         });
 
-        // Post thread header (ephemeral) — after register, outside lock-critical section
-        const headerText = buildThreadHeaderText({
-          projectPath,
-          model: prefs.defaultModel,
-          sessionId,
-        });
-        await app.client.chat.postEphemeral({
-          channel: channelId,
-          thread_ts: threadTs,
-          user: userId,
-          text: headerText,
-        });
+        if (!isChannel) {
+          const headerText = buildThreadHeaderText({ projectPath, model: sessionModel, sessionId });
+          await app.client.chat.postEphemeral({ channel: channelId, thread_ts: threadTs, user: userId, text: headerText });
+        }
 
         indexEntry = sessionIndexStore.findByThreadTs(threadTs)!;
       } else {
-        // Existing session — always use user's current preferred model
-        const prefs = userPrefStore.get(userId);
-        const preferredModel = prefs.defaultModel;
         const existingSession = coordinator.getSession(indexEntry.cliSessionId);
 
-        if (existingSession && existingSession.state !== 'dead') {
-          // If model changed, kill the old session and respawn with new model
-          if (existingSession.model !== preferredModel) {
-            logger.info(`Model changed from ${existingSession.model} to ${preferredModel}, restarting session ${indexEntry.cliSessionId}`);
-            existingSession.kill('model_change');
-            await app.client.chat.postMessage({
-              channel: channelId,
-              thread_ts: threadTs,
-              text: `:arrows_counterclockwise: モデルを ${existingSession.model} → ${preferredModel} に変更しました。セッションを再起動します。`,
+        if (isChannel) {
+          if (existingSession && existingSession.state !== 'dead') {
+            session = existingSession;
+          } else {
+            const channelContext = await channelProjectManager.buildContext(event.channel);
+            session = await coordinator.getOrCreateSession({
+              sessionId: indexEntry.cliSessionId,
+              userId: channelId,
+              model: indexEntry.model,
+              projectPath: indexEntry.projectPath,
+              isResume: true,
+              bridgeContext: channelContext,
+              maxAliveOverride: 3,
             });
-            // Wait for process to die before respawning
-            await new Promise<void>((resolve) => {
-              if (existingSession.state === 'dead') return resolve();
-              existingSession.on('stateChange', (_from: string, to: string) => {
-                if (to === 'dead') resolve();
+          }
+        } else {
+          // Existing DM session — model switch logic
+          const prefs = userPrefStore.get(userId);
+          const preferredModel = prefs.defaultModel;
+
+          if (existingSession && existingSession.state !== 'dead') {
+            if (existingSession.model !== preferredModel) {
+              logger.info(`Model changed from ${existingSession.model} to ${preferredModel}, restarting session ${indexEntry.cliSessionId}`);
+              existingSession.kill('model_change');
+              await app.client.chat.postMessage({
+                channel: channelId,
+                thread_ts: threadTs,
+                text: `:arrows_counterclockwise: モデルを ${existingSession.model} → ${preferredModel} に変更しました。セッションを再起動します。`,
               });
-            });
+              await new Promise<void>((resolve) => {
+                if (existingSession.state === 'dead') return resolve();
+                existingSession.on('stateChange', (_from: string, to: string) => {
+                  if (to === 'dead') resolve();
+                });
+              });
+              session = await coordinator.getOrCreateSession({
+                sessionId: indexEntry.cliSessionId,
+                userId,
+                model: preferredModel,
+                projectPath: indexEntry.projectPath,
+                isResume: true,
+                bridgeContext,
+              });
+            } else {
+              session = existingSession;
+            }
+          } else {
             session = await coordinator.getOrCreateSession({
               sessionId: indexEntry.cliSessionId,
               userId,
@@ -510,24 +556,11 @@ async function main(): Promise<void> {
               isResume: true,
               bridgeContext,
             });
-          } else {
-            session = existingSession;
           }
-        } else {
-          // Respawn dead session with current preferred model
-          session = await coordinator.getOrCreateSession({
-            sessionId: indexEntry.cliSessionId,
-            userId,
-            model: preferredModel,
-            projectPath: indexEntry.projectPath,
-            isResume: true,
-            bridgeContext,
-          });
-        }
 
-        // Update index if model changed
-        if (indexEntry.model !== preferredModel) {
-          sessionIndexStore.update(indexEntry.cliSessionId, { model: preferredModel });
+          if (indexEntry.model !== preferredModel) {
+            sessionIndexStore.update(indexEntry.cliSessionId, { model: preferredModel });
+          }
         }
       }
     } finally {
@@ -751,6 +784,49 @@ async function main(): Promise<void> {
   app.event('message', async ({ event }) => {
     logger.info('[DEBUG] Bolt message event received', { event_type: (event as any).type, channel_type: (event as any).channel_type });
     await handleMessage(event);
+  });
+
+  app.event('member_joined_channel', async ({ event }: any) => {
+    if (event.user !== botUserId) return;
+    const channelId = event.channel;
+
+    if (channelProjectManager.exists(channelId)) {
+      await app.client.chat.postMessage({
+        channel: channelId,
+        text: '👋 既存のプロジェクトを復帰しました。続きから始めましょう。',
+      });
+      logger.info(`Channel project reactivated: ${channelId}`);
+      return;
+    }
+
+    try {
+      await channelProjectManager.init(channelId);
+      await app.client.chat.postMessage({
+        channel: channelId,
+        text: '✅ AIアプリとして初期化しました。何を作りましょう？',
+      });
+      logger.info(`Channel project initialized: ${channelId}`);
+    } catch (err) {
+      logger.error(`Failed to init channel project: ${channelId}`, err);
+      await app.client.chat.postMessage({
+        channel: channelId,
+        text: '❌ プロジェクトの初期化に失敗しました。',
+      });
+    }
+  });
+
+  app.event('member_left_channel', async ({ event }: any) => {
+    if (event.user !== botUserId) return;
+    const channelId = event.channel;
+    logger.info(`Bot left channel ${channelId}, deactivating`);
+
+    const activeEntries = sessionIndexStore.findActiveByChannelId(channelId);
+    for (const entry of activeEntries) {
+      coordinator.endSession(entry.cliSessionId);
+      sessionIndexStore.update(entry.cliSessionId, { status: 'ended' });
+    }
+
+    channelScheduler.stopChannel(channelId);
   });
 
   // Track pending restart-complete for home tab
@@ -1175,6 +1251,80 @@ async function main(): Promise<void> {
 
   // --- Start ---
   await startApp(app);
+
+  const authTestResult = await app.client.auth.test();
+  const botUserId = authTestResult.user_id!;
+  logger.info(`Bot user ID resolved: ${botUserId}`);
+
+  const channelScheduler = new ChannelScheduler(
+    path.join(config.dataDir, 'channels'),
+    async (chId, trigger) => {
+      try {
+        const result = await app.client.chat.postMessage({
+          channel: chId,
+          text: `⏰ 定時実行: ${trigger.name}`,
+        });
+        if (!result.ts) {
+          logger.error(`Failed to post trigger message to ${chId}`);
+          return;
+        }
+
+        const triggerThreadTs = result.ts;
+        const triggerProjectPath = channelProjectManager.getProjectPath(chId);
+
+        let triggerModel = 'sonnet';
+        try {
+          const settings = JSON.parse(fs.readFileSync(path.join(triggerProjectPath, '.claude', 'settings.json'), 'utf-8'));
+          triggerModel = settings.model || 'sonnet';
+        } catch { /* default */ }
+
+        const triggerContext = await channelProjectManager.buildContext(chId);
+        const triggerSessionId = crypto.randomUUID();
+
+        const triggerSession = await coordinator.getOrCreateSession({
+          sessionId: triggerSessionId,
+          userId: chId,
+          model: triggerModel,
+          projectPath: triggerProjectPath,
+          isResume: false,
+          bridgeContext: triggerContext,
+          maxAliveOverride: 3,
+        });
+
+        sessionIndexStore.register({
+          cliSessionId: triggerSessionId,
+          threadTs: triggerThreadTs,
+          channelId: chId,
+          userId: chId,
+          projectPath: triggerProjectPath,
+          name: trigger.name,
+          model: triggerModel,
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          lastActiveAt: new Date().toISOString(),
+        });
+
+        wireSessionOutput(triggerSession, chId, triggerThreadTs, reactionManager, app.client, sessionIndexStore, triggerProjectPath);
+        activeMessageTs.set(triggerSession.sessionId, result.ts);
+        await reactionManager.addSpawning(chId, result.ts);
+        triggerSession.sendInitialPrompt(trigger.prompt);
+
+        await waitForInit(triggerSession).catch(async (err) => {
+          triggerSession.end();
+          await app.client.chat.postMessage({
+            channel: chId,
+            thread_ts: triggerThreadTs,
+            text: `❌ 定時実行 "${trigger.name}" の起動に失敗: ${(err as Error).message}`,
+          });
+        });
+      } catch (err) {
+        logger.error(`Trigger failed: ${chId}/${trigger.name}`, err);
+      }
+    },
+  );
+
+  channelScheduler.loadAll();
+
   logger.info('Claude Code Slack Bridge is running (Phase 2)');
 
   // Prevent Slack SDK's reconnection failure from crashing the process.
@@ -1354,6 +1504,7 @@ async function main(): Promise<void> {
     activeMessageTs.clear();
     tunnelManager.stopAll();
     networkWatcher.stop();
+    channelScheduler.stop();
     // Clear crash history on intentional restart so it doesn't trigger circuit breaker
     if ((signal === 'restart-bridge' || signal === 'wifi-reconnect' || signal === 'auto-update') && process.env.MANAGED_BY_LAUNCHD) {
       const crashFile = path.join(os.homedir(), '.claude-slack-pipe', 'crash-history.json');
@@ -1376,6 +1527,10 @@ async function main(): Promise<void> {
     autoUpdater!.onSessionIdle().catch((err) => {
       logger.warn('[AutoUpdater] onSessionIdle failed', { error: err?.message });
     });
+    // Reload channel schedules on session idle
+    for (const chId of channelProjectManager.listChannelIds()) {
+      channelScheduler.loadChannel(chId);
+    }
   };
 
   autoUpdater.start();
