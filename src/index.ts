@@ -35,6 +35,7 @@ import { RecentSessionScanner } from './store/recent-session-scanner.js';
 import { TunnelManager } from './streaming/tunnel-manager.js';
 import { NetworkWatcher } from './utils/network-watcher.js';
 import { AutoUpdater } from './auto-updater.js';
+import { SocketWatchdog } from './utils/socket-watchdog.js';
 import { buildBridgeContext, migrateTemplates } from './bridge/bridge-context.js';
 
 /**
@@ -221,6 +222,7 @@ async function main(): Promise<void> {
   // --- Message Handler ---
   async function handleMessage(event: any): Promise<void> {
     if (isShuttingDown) return;
+    socketWatchdog.recordMessageEvent();
     logger.info('[DEBUG] handleMessage called', { type: event.type, channel_type: event.channel_type, bot_id: event.bot_id, subtype: event.subtype, text: event.text?.slice(0, 50), user: event.user, ts: event.ts, client_msg_id: event.client_msg_id });
     const isChannel = event.channel_type !== 'im';
 
@@ -1332,6 +1334,14 @@ async function main(): Promise<void> {
   // an unhandled rejection. We catch it here to keep the process alive
   // until NetworkWatcher detects WiFi recovery and triggers a clean restart.
   let isShuttingDown = false;
+
+  // Socket Mode WebSocket health monitor — logs state every 5 min,
+  // triggers restart if isActive() === false.
+  // shutdown callback is assigned later to avoid TDZ.
+  const socketWatchdog = new SocketWatchdog({
+    app,
+    shutdown: async (signal: string) => shutdown(signal),
+  });
   process.on('unhandledRejection', (reason: unknown) => {
     if (isShuttingDown) return;
     logger.error('[Resilience] Unhandled rejection caught (crash prevented)', {
@@ -1483,6 +1493,7 @@ async function main(): Promise<void> {
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {
+    if (isShuttingDown) return;
     isShuttingDown = true;
     autoUpdater?.stop();
     logger.info(`Received ${signal}, shutting down...`);
@@ -1505,8 +1516,9 @@ async function main(): Promise<void> {
     tunnelManager.stopAll();
     networkWatcher.stop();
     channelScheduler.stop();
+    socketWatchdog.stop();
     // Clear crash history on intentional restart so it doesn't trigger circuit breaker
-    if ((signal === 'restart-bridge' || signal === 'wifi-reconnect' || signal === 'auto-update') && process.env.MANAGED_BY_LAUNCHD) {
+    if ((signal === 'restart-bridge' || signal === 'wifi-reconnect' || signal === 'auto-update' || signal === 'websocket-dead') && process.env.MANAGED_BY_LAUNCHD) {
       const crashFile = path.join(os.homedir(), '.claude-slack-pipe', 'crash-history.json');
       try { fs.writeFileSync(crashFile, '[]'); } catch { /* best-effort */ }
     }
@@ -1534,6 +1546,7 @@ async function main(): Promise<void> {
   };
 
   autoUpdater.start();
+  socketWatchdog.start();
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
