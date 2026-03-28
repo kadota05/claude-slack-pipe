@@ -72,4 +72,27 @@ describe('SessionIndexStore', () => {
     const store2 = new SessionIndexStore(tmpDir);
     expect(store2.get('cli-001')).toBeDefined();
   });
+
+  describe('findActiveByChannelId', () => {
+    it('returns active sessions for a channel', () => {
+      store.register(entry);
+      store.register({ ...entry, cliSessionId: 'cli-002', threadTs: '999', channelId: 'C001', status: 'active' });
+      store.register({ ...entry, cliSessionId: 'cli-003', threadTs: '888', channelId: 'C002', status: 'active' });
+      const results = store.findActiveByChannelId('C001');
+      expect(results).toHaveLength(2);
+    });
+
+    it('excludes ended sessions', () => {
+      store.register(entry);
+      store.register({ ...entry, cliSessionId: 'cli-002', threadTs: '999', channelId: 'C001', status: 'ended' });
+      const results = store.findActiveByChannelId('C001');
+      expect(results).toHaveLength(1);
+      expect(results[0].cliSessionId).toBe('cli-001');
+    });
+
+    it('returns empty for unknown channel', () => {
+      store.register(entry);
+      expect(store.findActiveByChannelId('C_UNKNOWN')).toHaveLength(0);
+    });
+  });
 });

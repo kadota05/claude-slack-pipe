@@ -34,7 +34,11 @@ export class SessionCoordinator {
       return existing.session;
     }
 
-    await this.enforceUserLimit(params.userId);
+    // Clean up dead entries periodically
+    this.cleanupDead();
+
+    await this.enforceUserLimit(params.userId, params.maxAliveOverride);
+    await this.enforceGlobalLimit();
 
     const session = new PersistentSession(params);
     const entry: ManagedEntry = {
@@ -105,7 +109,8 @@ export class SessionCoordinator {
     return true;
   }
 
-  private async enforceUserLimit(userId: string): Promise<void> {
+  private async enforceUserLimit(userId: string, maxAliveOverride?: number): Promise<void> {
+    const limit = maxAliveOverride ?? this.config.maxAlivePerUser;
     const userSessions: ManagedEntry[] = [];
     for (const entry of this.entries.values()) {
       if (entry.userId === userId && entry.session.state !== 'dead' && entry.session.state !== 'not_started') {
@@ -113,9 +118,35 @@ export class SessionCoordinator {
       }
     }
 
-    while (userSessions.length >= this.config.maxAlivePerUser) {
+    while (userSessions.length >= limit) {
       const oldest = userSessions.shift()!;
       oldest.session.end();
+    }
+  }
+
+  private async enforceGlobalLimit(): Promise<void> {
+    const alive = this.getAliveCount();
+    if (alive < this.config.maxAliveGlobal) return;
+
+    const sorted = [...this.entries.values()]
+      .filter(e => e.session.state !== 'dead' && e.session.state !== 'not_started')
+      .sort((a, b) => {
+        if (a.session.state === 'idle' && b.session.state !== 'idle') return -1;
+        if (b.session.state === 'idle' && a.session.state !== 'idle') return 1;
+        return 0;
+      });
+
+    while (sorted.length >= this.config.maxAliveGlobal) {
+      const oldest = sorted.shift()!;
+      oldest.session.end();
+    }
+  }
+
+  private cleanupDead(): void {
+    for (const [id, entry] of this.entries) {
+      if (entry.session.state === 'dead') {
+        this.entries.delete(id);
+      }
     }
   }
 

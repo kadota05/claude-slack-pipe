@@ -54,6 +54,11 @@ export class SessionIndexStore {
       .sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt));
   }
 
+  findActiveByChannelId(channelId: string): SessionIndexEntry[] {
+    return Object.values(this.data.sessions)
+      .filter((e) => e.channelId === channelId && e.status === 'active');
+  }
+
   getEnded(limit = 20): SessionIndexEntry[] {
     return Object.values(this.data.sessions)
       .filter((e) => e.status === 'ended')

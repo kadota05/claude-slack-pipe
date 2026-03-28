@@ -343,6 +343,7 @@ export interface SessionStartParams {
   projectPath: string;
   isResume: boolean;
   bridgeContext?: string;
+  maxAliveOverride?: number;
 }
 
 export interface ControlMessage {
