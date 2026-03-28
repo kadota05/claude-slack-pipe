@@ -34,6 +34,13 @@
 「いつ、何のプロンプトを投入するか」を定義。
 bridgeのスケジューラが読んで実行する。
 
+## Slack操作
+Slackへの投稿・リアクション等の操作は
+すべてBridgeのSlack Bot Tokenを経由する。
+MCP Slackツール（slack_send_message等）は
+使わないこと。
+テキストを出力すればBridgeが投稿する。
+
 ## 育て方の原則
 1. 対話でアプリの目的を理解する
 2. CLAUDE.mdのアプリ定義に目的とルールを書く
