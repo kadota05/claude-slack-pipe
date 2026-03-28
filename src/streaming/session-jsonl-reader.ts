@@ -341,6 +341,7 @@ export class SessionJsonlReader {
   }
 
   private toProjectDirName(projectPath: string): string {
-    return projectPath.replace(/\//g, '-');
+    // Claude CLI normalizes: dots → dashes, then slashes → dashes
+    return projectPath.replace(/\./g, '-').replace(/\//g, '-');
   }
 }
