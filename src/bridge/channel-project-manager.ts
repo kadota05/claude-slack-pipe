@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { discoverSkills } from './bridge-context.js';
 import { logger } from '../utils/logger.js';
 
@@ -48,6 +49,17 @@ export class ChannelProjectManager {
     await fsp.mkdir(path.join(projectPath, 'skills'), { recursive: true });
     await fsp.mkdir(path.join(projectPath, 'mcps'), { recursive: true });
     await fsp.mkdir(path.join(projectPath, '.claude'), { recursive: true });
+
+    // Git init (Claude CLI requires a git repo as cwd)
+    const gitDir = path.join(projectPath, '.git');
+    if (!fs.existsSync(gitDir)) {
+      try {
+        execSync('git init', { cwd: projectPath, stdio: 'ignore' });
+        logger.info(`Git initialized for channel project: ${channelId}`);
+      } catch (err) {
+        logger.warn(`Failed to git init channel project: ${channelId}`, err);
+      }
+    }
 
     // CLAUDE.md from template (only if not exists)
     const claudeMdDest = path.join(projectPath, 'CLAUDE.md');
