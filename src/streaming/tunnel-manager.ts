@@ -100,11 +100,19 @@ export class TunnelManager {
       proc.stderr?.on('data', (data: Buffer) => {
         const line = data.toString();
         const match = line.match(TUNNEL_URL_REGEX);
-        if (match && !entry.url) {
-          entry.url = match[0];
-          clearTimeout(timeout);
-          logger.info(`Tunnel established: localhost:${port} -> ${entry.url}`);
-          resolve(entry.url);
+        if (match) {
+          const newUrl = match[0];
+          if (!entry.url) {
+            // First URL — resolve the pending promise
+            entry.url = newUrl;
+            clearTimeout(timeout);
+            logger.info(`Tunnel established: localhost:${port} -> ${entry.url}`);
+            resolve(entry.url);
+          } else if (entry.url !== newUrl) {
+            // cloudflared reconnected with a new URL — update cache
+            entry.url = newUrl;
+            logger.info(`Tunnel URL updated: localhost:${port} -> ${entry.url}`);
+          }
         }
       });
 
