@@ -54,40 +54,53 @@ export function extractLocalUrls(text: string): LocalUrl[] {
   return results;
 }
 
-export function rewriteLocalUrls(
-  text: string,
-  urlMap: Map<string, string>
-): string {
-  if (urlMap.size === 0) return text;
+import type { Block } from './types.js';
 
-  // Sort by URL length descending to avoid partial match issues
-  // e.g. "http://localhost:3000/path" before "http://localhost:3000"
-  const sortedEntries = [...urlMap.entries()].sort(
-    (a, b) => b[0].length - a[0].length
-  );
+/**
+ * Build Slack blocks for localhost access links.
+ * - Tunnel success: URL button (opens tunnel URL in mobile browser)
+ * - Tunnel failure: warning context block
+ */
+export function buildLocalhostAccessBlocks(
+  localUrls: LocalUrl[],
+  urlMap: Map<string, string>,
+): Block[] {
+  const blocks: Block[] = [];
+  const buttons: any[] = [];
+  const failedPorts: number[] = [];
 
-  let result = text;
-  for (const [originalUrl, tunnelUrl] of sortedEntries) {
-    const escaped = originalUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-    // First: replace Slack mrkdwn links <localUrl|text> with <tunnelUrl|text>
-    result = result.replace(
-      new RegExp(`<${escaped}\\|([^>]+)>`, 'g'),
-      `<${tunnelUrl}|$1>`
-    );
-
-    // Then: replace bare occurrences (not inside mrkdwn links)
-    // Consume surrounding backticks if present to avoid doubling them
-    // Single pass: match with-protocol OR without-protocol to avoid double replacement
-    const displayUrl = originalUrl.replace(/^https?:\/\//, '');
-    const escapedDisplay = displayUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const replacement = `\`${displayUrl}\` （ <${tunnelUrl}|Slackからはこちら> ）`;
-
-    result = result.replace(
-      new RegExp(`\`?(?<![<|])(?:${escaped}|(?<![:/\\w])${escapedDisplay})\`?`, 'g'),
-      replacement
-    );
+  for (const { url, port } of localUrls) {
+    const tunnelUrl = urlMap.get(url);
+    if (tunnelUrl) {
+      const displayUrl = url.replace(/^https?:\/\//, '');
+      buttons.push({
+        type: 'button',
+        text: { type: 'plain_text', text: `🌐 ${displayUrl}` },
+        url: tunnelUrl,
+        action_id: `tunnel_access:${buttons.length}`,
+      });
+    } else {
+      if (!failedPorts.includes(port)) failedPorts.push(port);
+    }
   }
 
-  return result;
+  if (buttons.length > 0) {
+    blocks.push({ type: 'divider' });
+    for (let i = 0; i < buttons.length; i += 25) {
+      blocks.push({ type: 'actions', elements: buttons.slice(i, i + 25) } as any);
+    }
+  }
+
+  if (failedPorts.length > 0) {
+    const ports = failedPorts.map(p => `localhost:${p}`).join(', ');
+    blocks.push({
+      type: 'context',
+      elements: [{
+        type: 'mrkdwn',
+        text: `⚠️ ${ports} のモバイルアクセスリンクを準備できませんでした`,
+      }],
+    });
+  }
+
+  return blocks;
 }

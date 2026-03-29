@@ -30,7 +30,7 @@ export class TunnelManager {
       this.evictOldest();
     }
 
-    const promise = this.spawnTunnel(port);
+    const promise = this.spawnTunnelWithRetry(port);
     this.pending.set(port, promise);
     promise.finally(() => this.pending.delete(port));
     return promise;
@@ -55,6 +55,24 @@ export class TunnelManager {
     }
   }
 
+  private async spawnTunnelWithRetry(port: number): Promise<string> {
+    const url = await this.spawnTunnel(port);
+    if (url) return url;
+
+    // Retry once — clean up failed attempt first
+    logger.info(`Retrying tunnel for port ${port}`);
+    this.cleanupTunnel(port);
+    return this.spawnTunnel(port);
+  }
+
+  private cleanupTunnel(port: number): void {
+    const entry = this.tunnels.get(port);
+    if (entry) {
+      entry.process.kill();
+      this.tunnels.delete(port);
+    }
+  }
+
   private spawnTunnel(port: number): Promise<string> {
     return new Promise((resolve) => {
       const proc = spawn('cloudflared', ['tunnel', '--url', `localhost:${port}`], {
@@ -72,7 +90,10 @@ export class TunnelManager {
       const timeout = setTimeout(() => {
         if (!entry.url) {
           logger.warn(`Tunnel timeout for port ${port} after ${TUNNEL_TIMEOUT_MS}ms`);
-          resolve(''); // Resolve empty so rewriter skips this URL
+          // Kill the timed-out process to avoid zombie
+          proc.kill();
+          this.tunnels.delete(port);
+          resolve('');
         }
       }, TUNNEL_TIMEOUT_MS);
 
@@ -91,12 +112,11 @@ export class TunnelManager {
         logger.error(`cloudflared error for port ${port}: ${err.message}`);
         this.tunnels.delete(port);
         clearTimeout(timeout);
-        resolve(''); // Graceful fallback
+        resolve('');
       });
 
       proc.on('exit', (code) => {
         if (entry.url) {
-          // Process died after URL was established — clean up for re-creation
           logger.warn(`cloudflared exited (code ${code}) for port ${port}, tunnel will be re-created on next use`);
           this.tunnels.delete(port);
         }

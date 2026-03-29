@@ -1,6 +1,6 @@
 // tests/streaming/localhost-rewriter.test.ts
 import { describe, it, expect } from 'vitest';
-import { isPrivateIp, extractLocalUrls, rewriteLocalUrls } from '../../src/streaming/localhost-rewriter.js';
+import { isPrivateIp, extractLocalUrls, buildLocalhostAccessBlocks } from '../../src/streaming/localhost-rewriter.js';
 
 describe('isPrivateIp', () => {
   it('returns true for localhost', () => {
@@ -93,77 +93,88 @@ describe('extractLocalUrls', () => {
   });
 });
 
-describe('rewriteLocalUrls', () => {
-  it('rewrites localhost URL with tunnel URL', () => {
-    const urlMap = new Map<string, string>([
-      ['http://localhost:3000', 'https://abc123.trycloudflare.com'],
-    ]);
-    const result = rewriteLocalUrls(
-      'Server running at http://localhost:3000',
-      urlMap
-    );
-    expect(result).toBe(
-      'Server running at `localhost:3000` （ <https://abc123.trycloudflare.com|Slackからはこちら> ）'
-    );
+describe('buildLocalhostAccessBlocks', () => {
+  it('builds URL button when tunnel succeeds', () => {
+    const localUrls = [{ url: 'http://localhost:3000', host: 'localhost', port: 3000 }];
+    const urlMap = new Map([['http://localhost:3000', 'https://abc123.trycloudflare.com']]);
+    const blocks = buildLocalhostAccessBlocks(localUrls, urlMap);
+
+    expect(blocks).toHaveLength(2); // divider + actions
+    expect(blocks[0]).toEqual({ type: 'divider' });
+    expect((blocks[1] as any).type).toBe('actions');
+    const button = (blocks[1] as any).elements[0];
+    expect(button.text.text).toBe('🌐 localhost:3000');
+    expect(button.url).toBe('https://abc123.trycloudflare.com');
   });
 
-  it('rewrites multiple URLs', () => {
-    const urlMap = new Map<string, string>([
+  it('builds multiple buttons for multiple URLs', () => {
+    const localUrls = [
+      { url: 'http://localhost:3000', host: 'localhost', port: 3000 },
+      { url: 'http://localhost:8080', host: 'localhost', port: 8080 },
+    ];
+    const urlMap = new Map([
       ['http://localhost:3000', 'https://aaa.trycloudflare.com'],
       ['http://localhost:8080', 'https://bbb.trycloudflare.com'],
     ]);
-    const result = rewriteLocalUrls(
-      'Frontend: http://localhost:3000 API: http://localhost:8080',
-      urlMap
-    );
-    expect(result).toContain('`localhost:3000` （ <https://aaa.trycloudflare.com|Slackからはこちら> ）');
-    expect(result).toContain('`localhost:8080` （ <https://bbb.trycloudflare.com|Slackからはこちら> ）');
+    const blocks = buildLocalhostAccessBlocks(localUrls, urlMap);
+
+    expect(blocks).toHaveLength(2); // divider + actions
+    const elements = (blocks[1] as any).elements;
+    expect(elements).toHaveLength(2);
+    expect(elements[0].url).toBe('https://aaa.trycloudflare.com');
+    expect(elements[1].url).toBe('https://bbb.trycloudflare.com');
   });
 
-  it('leaves URL unchanged when no tunnel URL available', () => {
+  it('shows warning when tunnel fails', () => {
+    const localUrls = [{ url: 'http://localhost:3000', host: 'localhost', port: 3000 }];
+    const urlMap = new Map<string, string>(); // empty = all failed
+    const blocks = buildLocalhostAccessBlocks(localUrls, urlMap);
+
+    expect(blocks).toHaveLength(1); // context only (no divider for failure-only)
+    expect((blocks[0] as any).type).toBe('context');
+    expect((blocks[0] as any).elements[0].text).toContain('localhost:3000');
+    expect((blocks[0] as any).elements[0].text).toContain('⚠️');
+  });
+
+  it('shows both button and warning for partial success', () => {
+    const localUrls = [
+      { url: 'http://localhost:3000', host: 'localhost', port: 3000 },
+      { url: 'http://localhost:8080', host: 'localhost', port: 8080 },
+    ];
+    const urlMap = new Map([['http://localhost:3000', 'https://aaa.trycloudflare.com']]);
+    const blocks = buildLocalhostAccessBlocks(localUrls, urlMap);
+
+    expect(blocks).toHaveLength(3); // divider + actions + context
+    expect((blocks[1] as any).elements[0].url).toBe('https://aaa.trycloudflare.com');
+    expect((blocks[2] as any).elements[0].text).toContain('localhost:8080');
+  });
+
+  it('returns empty blocks when no URLs', () => {
+    const blocks = buildLocalhostAccessBlocks([], new Map());
+    expect(blocks).toEqual([]);
+  });
+
+  it('displays path in button text', () => {
+    const localUrls = [{ url: 'http://localhost:5173/dashboard', host: 'localhost', port: 5173 }];
+    const urlMap = new Map([['http://localhost:5173/dashboard', 'https://abc.trycloudflare.com/dashboard']]);
+    const blocks = buildLocalhostAccessBlocks(localUrls, urlMap);
+
+    const button = (blocks[1] as any).elements[0];
+    expect(button.text.text).toBe('🌐 localhost:5173/dashboard');
+    expect(button.url).toBe('https://abc.trycloudflare.com/dashboard');
+  });
+
+  it('deduplicates failed ports', () => {
+    const localUrls = [
+      { url: 'http://localhost:3000', host: 'localhost', port: 3000 },
+      { url: 'http://localhost:3000/api', host: 'localhost', port: 3000 },
+    ];
     const urlMap = new Map<string, string>();
-    const result = rewriteLocalUrls(
-      'Server running at http://localhost:3000',
-      urlMap
-    );
-    expect(result).toBe('Server running at http://localhost:3000');
-  });
+    const blocks = buildLocalhostAccessBlocks(localUrls, urlMap);
 
-  it('rewrites URL with path, mapping to base tunnel URL with path', () => {
-    const urlMap = new Map<string, string>([
-      ['http://localhost:5173/dashboard', 'https://abc123.trycloudflare.com/dashboard'],
-    ]);
-    const result = rewriteLocalUrls(
-      'Open http://localhost:5173/dashboard',
-      urlMap
-    );
-    expect(result).toContain('`localhost:5173/dashboard` （ <https://abc123.trycloudflare.com/dashboard|Slackからはこちら> ）');
-  });
-
-  it('does not double backticks when URL is already in backticks', () => {
-    const urlMap = new Map<string, string>([
-      ['http://localhost:8765/fun.html', 'https://abc123.trycloudflare.com/fun.html'],
-    ]);
-    const result = rewriteLocalUrls(
-      '`http://localhost:8765/fun.html` で動いてます',
-      urlMap
-    );
-    expect(result).toBe(
-      '`localhost:8765/fun.html` （ <https://abc123.trycloudflare.com/fun.html|Slackからはこちら> ） で動いてます'
-    );
-    expect(result).not.toContain('``');
-  });
-
-  it('rewrites URL without protocol in backticks', () => {
-    const urlMap = new Map<string, string>([
-      ['http://localhost:8765/fun.html', 'https://abc123.trycloudflare.com/fun.html'],
-    ]);
-    const result = rewriteLocalUrls(
-      '`localhost:8765/fun.html` で動いてます',
-      urlMap
-    );
-    expect(result).toBe(
-      '`localhost:8765/fun.html` （ <https://abc123.trycloudflare.com/fun.html|Slackからはこちら> ） で動いてます'
-    );
+    expect(blocks).toHaveLength(1);
+    const text = (blocks[0] as any).elements[0].text;
+    // Should mention port 3000 only once
+    expect(text.match(/localhost:3000/g)).toHaveLength(1);
   });
 });

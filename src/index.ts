@@ -1151,6 +1151,11 @@ async function main(): Promise<void> {
   });
 
   // --- File Content Modal Action ---
+  // Tunnel access buttons — just ack (the URL opens via the button's url property)
+  app.action(/^tunnel_access/, async ({ ack }: any) => {
+    await ack();
+  });
+
   app.action(/^view_file_content/, async ({ ack, body }: any) => {
     await ack();
     const filePath = body.actions?.[0]?.value;

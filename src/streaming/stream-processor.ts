@@ -5,7 +5,8 @@ import { convertMarkdownToMrkdwn } from './markdown-converter.js';
 import { GroupTracker } from './group-tracker.js';
 import { TunnelManager } from './tunnel-manager.js';
 import { notifyText } from './notification-text.js';
-import { extractLocalUrls, rewriteLocalUrls } from './localhost-rewriter.js';
+import { extractLocalUrls, buildLocalhostAccessBlocks } from './localhost-rewriter.js';
+import type { LocalUrl } from './localhost-rewriter.js';
 import { extractFilePaths } from './file-path-extractor.js';
 import { buildFileReferenceBlocks } from './file-reference-blocks.js';
 import type { TokenUsage } from '../types.js';
@@ -33,6 +34,8 @@ export class StreamProcessor {
   private textMessageTs: string | null = null;
   private lastMainUsage: TokenUsage | null = null;
   private firstContentReceived = false;
+  // Accumulate localhost URLs across entire session (survives finalizeCurrentText)
+  private discoveredLocalUrls = new Map<string, LocalUrl>();
 
   constructor(config: StreamProcessorConfig) {
     this.config = config;
@@ -97,6 +100,7 @@ export class StreamProcessor {
     this.textMessageTs = null;
     this.lastMainUsage = null;
     this.firstContentReceived = false;
+    this.discoveredLocalUrls.clear();
   }
 
   dispose(): void {
@@ -163,9 +167,11 @@ export class StreamProcessor {
     if (this.tunnelManager) {
       // Scan full buffer, not just new chunk — URLs may be split across chunks
       const localUrls = extractLocalUrls(this.textBuffer);
-      for (const { port } of localUrls) {
+      for (const localUrl of localUrls) {
+        // Accumulate across session (survives finalizeCurrentText buffer clears)
+        this.discoveredLocalUrls.set(localUrl.url, localUrl);
         // Fire-and-forget: start tunnel in parallel (deduplication handled by TunnelManager)
-        this.tunnelManager.startTunnel(port);
+        this.tunnelManager.startTunnel(localUrl.port);
       }
     }
 
@@ -273,28 +279,35 @@ export class StreamProcessor {
     if (this.textBuffer) {
       let converted = convertMarkdownToMrkdwn(this.textBuffer);
 
-      // Rewrite localhost URLs AFTER mrkdwn conversion to avoid
-      // <url|text> links being stripped by HTML tag removal in converter
-      if (this.tunnelManager) {
-        const localUrls = extractLocalUrls(converted);
-        if (localUrls.length > 0) {
-          const urlMap = new Map<string, string>();
-          await Promise.all(
-            localUrls.map(async ({ url, port }) => {
-              const tunnelUrl = await this.tunnelManager!.startTunnel(port);
-              if (tunnelUrl) {
-                const parsed = new URL(url);
-                const path = parsed.pathname + parsed.search + parsed.hash;
-                urlMap.set(url, tunnelUrl + (path === '/' ? '' : path));
-              }
-            })
-          );
-          converted = rewriteLocalUrls(converted, urlMap);
+      const blocks = this.buildTextBlocks(converted);
+
+      // Append localhost access buttons (tunnel URL buttons or failure warning)
+      // Uses session-wide accumulated URLs, not just current text buffer,
+      // so URLs from earlier text rounds (before tool use) are not lost
+      if (this.tunnelManager && this.discoveredLocalUrls.size > 0) {
+        // Also scan current text in case new URLs appeared in final text
+        for (const localUrl of extractLocalUrls(converted)) {
+          this.discoveredLocalUrls.set(localUrl.url, localUrl);
+        }
+
+        const allLocalUrls = [...this.discoveredLocalUrls.values()];
+        const urlMap = new Map<string, string>();
+        await Promise.all(
+          allLocalUrls.map(async ({ url, port }) => {
+            const tunnelUrl = await this.tunnelManager!.startTunnel(port);
+            if (tunnelUrl) {
+              const parsed = new URL(url);
+              const path = parsed.pathname + parsed.search + parsed.hash;
+              urlMap.set(url, tunnelUrl + (path === '/' ? '' : path));
+            }
+          })
+        );
+        const accessBlocks = buildLocalhostAccessBlocks(allLocalUrls, urlMap);
+        const maxAccessBlocks = 50 - blocks.length;
+        if (accessBlocks.length > 0 && maxAccessBlocks > 0) {
+          blocks.push(...accessBlocks.slice(0, maxAccessBlocks));
         }
       }
-
-      logger.info(`[tunnel-debug] final converted text: ${JSON.stringify(converted.substring(0, 500))}`);
-      const blocks = this.buildTextBlocks(converted);
 
       // Append file reference buttons
       const filePaths = extractFilePaths(this.textBuffer, this.config.cwd ?? process.cwd());
