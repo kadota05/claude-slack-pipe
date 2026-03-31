@@ -296,9 +296,14 @@ export class StreamProcessor {
           allLocalUrls.map(async ({ url, port }) => {
             const tunnelUrl = await this.tunnelManager!.startTunnel(port);
             if (tunnelUrl) {
-              const parsed = new URL(url);
-              const path = parsed.pathname + parsed.search + parsed.hash;
-              urlMap.set(url, tunnelUrl + (path === '/' ? '' : path));
+              try {
+                const parsed = new URL(url);
+                const path = parsed.pathname + parsed.search + parsed.hash;
+                urlMap.set(url, tunnelUrl + (path === '/' ? '' : path));
+              } catch {
+                // Fallback: map to tunnel root if URL parsing fails
+                urlMap.set(url, tunnelUrl);
+              }
             }
           })
         );

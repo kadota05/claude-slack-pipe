@@ -91,6 +91,16 @@ describe('extractLocalUrls', () => {
     const result = extractLocalUrls('connect to localhost for details');
     expect(result).toEqual([]);
   });
+
+  it('does not include CJK characters in URL tail', () => {
+    const result = extractLocalUrls('http://localhost:8080を開く');
+    expect(result).toEqual([{ url: 'http://localhost:8080', host: 'localhost', port: 8080 }]);
+  });
+
+  it('does not include CJK characters in URL tail (without protocol)', () => {
+    const result = extractLocalUrls('localhost:8080を開く');
+    expect(result).toEqual([{ url: 'http://localhost:8080', host: 'localhost', port: 8080 }]);
+  });
 });
 
 describe('buildLocalhostAccessBlocks', () => {

@@ -1,7 +1,9 @@
 // src/streaming/localhost-rewriter.ts
 
 const LOCAL_HOST_NAMES = `(localhost|127\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|0\\.0\\.0\\.0|\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})`;
-const URL_TAIL = `[^\\s)<>|\`]*`;
+// Exclude non-ASCII (\\u0080+) to avoid matching CJK characters
+// that follow URLs without a space (e.g. "localhost:8080を開く")
+const URL_TAIL = `[^\\s)<>|\`\\u0080-\\uffff]*`;
 
 // With protocol: port is optional (defaults to 80)
 const WITH_PROTOCOL = new RegExp(`https?:\\/\\/${LOCAL_HOST_NAMES}(:\\d+)?${URL_TAIL}`, 'g');
