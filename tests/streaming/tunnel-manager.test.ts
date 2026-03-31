@@ -37,18 +37,11 @@ describe('TunnelManager', () => {
     expect(manager.getTunnelUrl(3000)).toBeUndefined();
   });
 
-  it('starts ssh tunnel with correct arguments', () => {
+  it('starts cloudflared with correct arguments', () => {
     manager.startTunnel(3000);
     expect(spawn).toHaveBeenCalledWith(
-      'ssh',
-      [
-        '-o', 'StrictHostKeyChecking=no',
-        '-o', 'ServerAliveInterval=30',
-        '-o', 'ConnectTimeout=10',
-        '-o', 'ExitOnForwardFailure=yes',
-        '-R', '80:localhost:3000',
-        'nokey@localhost.run',
-      ],
+      'cloudflared',
+      ['tunnel', '--url', 'localhost:3000'],
       expect.any(Object)
     );
   });
@@ -59,19 +52,19 @@ describe('TunnelManager', () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
-  it('parses tunnel URL from stdout', async () => {
+  it('parses tunnel URL from stderr', async () => {
     const promise = manager.startTunnel(3000);
     const mockProc = (spawn as any).mock.results[0].value;
 
-    // Simulate localhost.run stdout output
-    mockProc.stdout.emit(
+    // Simulate cloudflared stderr output
+    mockProc.stderr.emit(
       'data',
-      Buffer.from('1a65eac44b35b1.lhr.life tunneled with tls termination, https://1a65eac44b35b1.lhr.life')
+      Buffer.from('2026-03-19T00:00:00Z INF |  https://test-tunnel.trycloudflare.com')
     );
 
     const url = await promise;
-    expect(url).toBe('https://1a65eac44b35b1.lhr.life');
-    expect(manager.getTunnelUrl(3000)).toBe('https://1a65eac44b35b1.lhr.life');
+    expect(url).toBe('https://test-tunnel.trycloudflare.com');
+    expect(manager.getTunnelUrl(3000)).toBe('https://test-tunnel.trycloudflare.com');
   });
 
   it('stopAll kills all processes', async () => {

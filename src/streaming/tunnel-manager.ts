@@ -3,9 +3,7 @@ import { logger } from '../utils/logger.js';
 
 const MAX_TUNNELS = 5;
 const TUNNEL_TIMEOUT_MS = 15000;
-const HEALTH_CHECK_TIMEOUT_MS = 5000;
-// localhost.run outputs URLs like: https://1a65eac44b35b1.lhr.life
-const TUNNEL_URL_REGEX = /https:\/\/[a-z0-9]+\.lhr\.life/;
+const TUNNEL_URL_REGEX = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
 
 interface TunnelEntry {
   process: ChildProcess;
@@ -18,16 +16,10 @@ export class TunnelManager {
   private tunnels = new Map<number, TunnelEntry>();
   private pending = new Map<number, Promise<string>>();
 
-  async startTunnel(port: number): Promise<string> {
-    // Check existing tunnel with health verification
+  startTunnel(port: number): Promise<string> {
+    // Return existing tunnel URL
     const existing = this.tunnels.get(port);
-    if (existing?.url) {
-      const healthy = await this.checkHealth(existing.url);
-      if (healthy) return existing.url;
-      // Tunnel is stale — kill and recreate
-      logger.warn(`Tunnel health check failed for port ${port}, recreating`);
-      this.cleanupTunnel(port);
-    }
+    if (existing?.url) return Promise.resolve(existing.url);
 
     // Return pending tunnel
     const pendingPromise = this.pending.get(port);
@@ -63,22 +55,6 @@ export class TunnelManager {
     }
   }
 
-  private async checkHealth(url: string): Promise<boolean> {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
-      const res = await fetch(url, {
-        method: 'HEAD',
-        signal: controller.signal,
-        redirect: 'follow',
-      });
-      clearTimeout(timeout);
-      return res.ok || res.status < 500;
-    } catch {
-      return false;
-    }
-  }
-
   private async spawnTunnelWithRetry(port: number): Promise<string> {
     const url = await this.spawnTunnel(port);
     if (url) return url;
@@ -99,14 +75,7 @@ export class TunnelManager {
 
   private spawnTunnel(port: number): Promise<string> {
     return new Promise((resolve) => {
-      const proc = spawn('ssh', [
-        '-o', 'StrictHostKeyChecking=no',
-        '-o', 'ServerAliveInterval=30',
-        '-o', 'ConnectTimeout=10',
-        '-o', 'ExitOnForwardFailure=yes',
-        '-R', `80:localhost:${port}`,
-        'nokey@localhost.run',
-      ], {
+      const proc = spawn('cloudflared', ['tunnel', '--url', `localhost:${port}`], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
@@ -121,35 +90,34 @@ export class TunnelManager {
       const timeout = setTimeout(() => {
         if (!entry.url) {
           logger.warn(`Tunnel timeout for port ${port} after ${TUNNEL_TIMEOUT_MS}ms`);
+          // Kill the timed-out process to avoid zombie
           proc.kill();
           this.tunnels.delete(port);
           resolve('');
         }
       }, TUNNEL_TIMEOUT_MS);
 
-      // localhost.run outputs the URL on stdout
-      const handleOutput = (data: Buffer) => {
+      proc.stderr?.on('data', (data: Buffer) => {
         const line = data.toString();
         const match = line.match(TUNNEL_URL_REGEX);
         if (match) {
           const newUrl = match[0];
           if (!entry.url) {
+            // First URL — resolve the pending promise
             entry.url = newUrl;
             clearTimeout(timeout);
             logger.info(`Tunnel established: localhost:${port} -> ${entry.url}`);
             resolve(entry.url);
           } else if (entry.url !== newUrl) {
+            // cloudflared reconnected with a new URL — update cache
             entry.url = newUrl;
             logger.info(`Tunnel URL updated: localhost:${port} -> ${entry.url}`);
           }
         }
-      };
-
-      proc.stdout?.on('data', handleOutput);
-      proc.stderr?.on('data', handleOutput);
+      });
 
       proc.on('error', (err) => {
-        logger.error(`SSH tunnel error for port ${port}: ${err.message}`);
+        logger.error(`cloudflared error for port ${port}: ${err.message}`);
         this.tunnels.delete(port);
         clearTimeout(timeout);
         resolve('');
@@ -157,7 +125,7 @@ export class TunnelManager {
 
       proc.on('exit', (code) => {
         if (entry.url) {
-          logger.warn(`SSH tunnel exited (code ${code}) for port ${port}, tunnel will be re-created on next use`);
+          logger.warn(`cloudflared exited (code ${code}) for port ${port}, tunnel will be re-created on next use`);
           this.tunnels.delete(port);
         }
       });
