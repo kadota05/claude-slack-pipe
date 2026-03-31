@@ -12,12 +12,16 @@ interface TunnelEntry {
   createdAt: number;
 }
 
+const ORPHAN_SCAN_INTERVAL_MS = 60000;
+
 export class TunnelManager {
   private tunnels = new Map<number, TunnelEntry>();
   private pending = new Map<number, Promise<string>>();
+  private orphanTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor() {
     this.cleanupOrphans();
+    this.orphanTimer = setInterval(() => this.killUntracked(), ORPHAN_SCAN_INTERVAL_MS);
   }
 
   private cleanupOrphans(): void {
@@ -26,6 +30,31 @@ export class TunnelManager {
       logger.info('Cleaned up orphaned cloudflared processes from previous session');
     } catch {
       // No orphaned processes — normal case
+    }
+  }
+
+  private killUntracked(): void {
+    try {
+      const output = execSync('pgrep -f "cloudflared tunnel --url localhost"', {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const ownedPids = new Set(
+        [...this.tunnels.values()].map((e) => e.process.pid).filter(Boolean),
+      );
+      const pids = output.trim().split('\n').map(Number).filter(Boolean);
+      for (const pid of pids) {
+        if (!ownedPids.has(pid)) {
+          try {
+            process.kill(pid, 'SIGKILL');
+            logger.warn(`Killed orphaned cloudflared process: PID ${pid}`);
+          } catch {
+            // Already dead
+          }
+        }
+      }
+    } catch {
+      // No cloudflared processes found — normal
     }
   }
 
@@ -63,6 +92,10 @@ export class TunnelManager {
   }
 
   stopAll(): void {
+    if (this.orphanTimer) {
+      clearInterval(this.orphanTimer);
+      this.orphanTimer = undefined;
+    }
     for (const [port] of this.tunnels) {
       this.stopTunnel(port);
     }
