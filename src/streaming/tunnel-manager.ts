@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, execSync, ChildProcess } from 'child_process';
 import { logger } from '../utils/logger.js';
 
 const MAX_TUNNELS = 5;
@@ -15,6 +15,19 @@ interface TunnelEntry {
 export class TunnelManager {
   private tunnels = new Map<number, TunnelEntry>();
   private pending = new Map<number, Promise<string>>();
+
+  constructor() {
+    this.cleanupOrphans();
+  }
+
+  private cleanupOrphans(): void {
+    try {
+      execSync('pkill -f "cloudflared tunnel --url localhost"', { stdio: 'ignore' });
+      logger.info('Cleaned up orphaned cloudflared processes from previous session');
+    } catch {
+      // No orphaned processes — normal case
+    }
+  }
 
   startTunnel(port: number): Promise<string> {
     // Return existing tunnel URL
