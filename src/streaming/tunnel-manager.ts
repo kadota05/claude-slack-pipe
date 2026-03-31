@@ -3,7 +3,8 @@ import { logger } from '../utils/logger.js';
 
 const MAX_TUNNELS = 5;
 const TUNNEL_TIMEOUT_MS = 15000;
-const TUNNEL_URL_REGEX = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
+// localhost.run outputs URLs like: https://1a65eac44b35b1.lhr.life
+const TUNNEL_URL_REGEX = /https:\/\/[a-z0-9]+\.lhr\.life/;
 
 interface TunnelEntry {
   process: ChildProcess;
@@ -75,7 +76,13 @@ export class TunnelManager {
 
   private spawnTunnel(port: number): Promise<string> {
     return new Promise((resolve) => {
-      const proc = spawn('cloudflared', ['tunnel', '--url', `localhost:${port}`], {
+      const proc = spawn('ssh', [
+        '-o', 'StrictHostKeyChecking=no',
+        '-o', 'ServerAliveInterval=30',
+        '-o', 'ConnectTimeout=10',
+        '-R', `80:localhost:${port}`,
+        'nokey@localhost.run',
+      ], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
@@ -90,34 +97,35 @@ export class TunnelManager {
       const timeout = setTimeout(() => {
         if (!entry.url) {
           logger.warn(`Tunnel timeout for port ${port} after ${TUNNEL_TIMEOUT_MS}ms`);
-          // Kill the timed-out process to avoid zombie
           proc.kill();
           this.tunnels.delete(port);
           resolve('');
         }
       }, TUNNEL_TIMEOUT_MS);
 
-      proc.stderr?.on('data', (data: Buffer) => {
+      // localhost.run outputs the URL on stdout
+      const handleOutput = (data: Buffer) => {
         const line = data.toString();
         const match = line.match(TUNNEL_URL_REGEX);
         if (match) {
           const newUrl = match[0];
           if (!entry.url) {
-            // First URL — resolve the pending promise
             entry.url = newUrl;
             clearTimeout(timeout);
             logger.info(`Tunnel established: localhost:${port} -> ${entry.url}`);
             resolve(entry.url);
           } else if (entry.url !== newUrl) {
-            // cloudflared reconnected with a new URL — update cache
             entry.url = newUrl;
             logger.info(`Tunnel URL updated: localhost:${port} -> ${entry.url}`);
           }
         }
-      });
+      };
+
+      proc.stdout?.on('data', handleOutput);
+      proc.stderr?.on('data', handleOutput);
 
       proc.on('error', (err) => {
-        logger.error(`cloudflared error for port ${port}: ${err.message}`);
+        logger.error(`SSH tunnel error for port ${port}: ${err.message}`);
         this.tunnels.delete(port);
         clearTimeout(timeout);
         resolve('');
@@ -125,7 +133,7 @@ export class TunnelManager {
 
       proc.on('exit', (code) => {
         if (entry.url) {
-          logger.warn(`cloudflared exited (code ${code}) for port ${port}, tunnel will be re-created on next use`);
+          logger.warn(`SSH tunnel exited (code ${code}) for port ${port}, tunnel will be re-created on next use`);
           this.tunnels.delete(port);
         }
       });
