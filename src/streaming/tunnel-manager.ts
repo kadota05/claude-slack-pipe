@@ -3,6 +3,7 @@ import { logger } from '../utils/logger.js';
 
 const MAX_TUNNELS = 5;
 const TUNNEL_TIMEOUT_MS = 15000;
+const HEALTH_CHECK_TIMEOUT_MS = 5000;
 // localhost.run outputs URLs like: https://1a65eac44b35b1.lhr.life
 const TUNNEL_URL_REGEX = /https:\/\/[a-z0-9]+\.lhr\.life/;
 
@@ -17,10 +18,16 @@ export class TunnelManager {
   private tunnels = new Map<number, TunnelEntry>();
   private pending = new Map<number, Promise<string>>();
 
-  startTunnel(port: number): Promise<string> {
-    // Return existing tunnel URL
+  async startTunnel(port: number): Promise<string> {
+    // Check existing tunnel with health verification
     const existing = this.tunnels.get(port);
-    if (existing?.url) return Promise.resolve(existing.url);
+    if (existing?.url) {
+      const healthy = await this.checkHealth(existing.url);
+      if (healthy) return existing.url;
+      // Tunnel is stale — kill and recreate
+      logger.warn(`Tunnel health check failed for port ${port}, recreating`);
+      this.cleanupTunnel(port);
+    }
 
     // Return pending tunnel
     const pendingPromise = this.pending.get(port);
@@ -56,6 +63,22 @@ export class TunnelManager {
     }
   }
 
+  private async checkHealth(url: string): Promise<boolean> {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
+      const res = await fetch(url, {
+        method: 'HEAD',
+        signal: controller.signal,
+        redirect: 'follow',
+      });
+      clearTimeout(timeout);
+      return res.ok || res.status < 500;
+    } catch {
+      return false;
+    }
+  }
+
   private async spawnTunnelWithRetry(port: number): Promise<string> {
     const url = await this.spawnTunnel(port);
     if (url) return url;
@@ -80,6 +103,7 @@ export class TunnelManager {
         '-o', 'StrictHostKeyChecking=no',
         '-o', 'ServerAliveInterval=30',
         '-o', 'ConnectTimeout=10',
+        '-o', 'ExitOnForwardFailure=yes',
         '-R', `80:localhost:${port}`,
         'nokey@localhost.run',
       ], {

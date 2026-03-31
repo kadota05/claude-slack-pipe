@@ -45,6 +45,7 @@ describe('TunnelManager', () => {
         '-o', 'StrictHostKeyChecking=no',
         '-o', 'ServerAliveInterval=30',
         '-o', 'ConnectTimeout=10',
+        '-o', 'ExitOnForwardFailure=yes',
         '-R', '80:localhost:3000',
         'nokey@localhost.run',
       ],
