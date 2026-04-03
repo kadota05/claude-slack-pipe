@@ -693,10 +693,19 @@ async function main(): Promise<void> {
           const { bundleActions, textAction, resultEvent, lastMainUsage } = await streamProcessor.processEvent(event);
 
           // 2. Execute bundle actions sequentially
+          const bundleTsMap = new Map<string, string>();
           for (const ba of bundleActions) {
+            // Resolve messageTs for collapse actions when postMessage hasn't executed yet
+            // (race condition: thinking+text in same event)
+            if (ba.type === 'collapse' && !ba.messageTs) {
+              const resolvedTs = bundleTsMap.get(ba.bundleId);
+              if (!resolvedTs) continue; // postMessage failed or was skipped
+              (ba as any).messageTs = resolvedTs;
+            }
             const slackAction = convertBundleActionToSlackAction(ba);
             const result = await executor.execute(slackAction);
             if (result.ok && result.ts && ba.type === 'postMessage') {
+              bundleTsMap.set(ba.bundleId, result.ts);
               streamProcessor.registerBundleMessageTs(ba.bundleId, result.ts);
             }
           }

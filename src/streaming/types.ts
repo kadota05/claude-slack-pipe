@@ -170,7 +170,7 @@ export interface CompletedGroup {
 export type BundleAction =
   | { type: 'postMessage'; bundleId: string; bundleIndex: number; blocks: Block[]; text: string }
   | { type: 'update'; bundleId: string; bundleIndex: number; messageTs: string; blocks: Block[]; text: string }
-  | { type: 'collapse'; bundleId: string; bundleIndex: number; bundleKey: string; messageTs: string; blocks: Block[]; text: string; sessionId?: string };
+  | { type: 'collapse'; bundleId: string; bundleIndex: number; bundleKey: string; messageTs: string | null; blocks: Block[]; text: string; sessionId?: string };
 
 export interface ProcessedActions {
   bundleActions: BundleAction[];

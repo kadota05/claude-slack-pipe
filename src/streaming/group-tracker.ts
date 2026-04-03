@@ -442,24 +442,22 @@ export class GroupTracker {
 
     const actions: BundleAction[] = [];
 
-    if (bundle.messageTs) {
-      actions.push({
-        type: 'collapse',
-        bundleId: bundle.id,
-        bundleIndex: bundle.index,
-        bundleKey,
-        messageTs: bundle.messageTs,
-        blocks,
-        text: notifyText.update.collapsed({
-          thinkingCount,
-          toolCount,
-          toolDurationMs,
-          subagentCount,
-          subagentDurationMs,
-        }),
-        sessionId,
-      });
-    }
+    actions.push({
+      type: 'collapse',
+      bundleId: bundle.id,
+      bundleIndex: bundle.index,
+      bundleKey,
+      messageTs: bundle.messageTs, // may be null if postMessage hasn't executed yet
+      blocks,
+      text: notifyText.update.collapsed({
+        thinkingCount,
+        toolCount,
+        toolDurationMs,
+        subagentCount,
+        subagentDurationMs,
+      }),
+      sessionId,
+    });
 
     // Reset bundle
     this.activeBundle = null;
