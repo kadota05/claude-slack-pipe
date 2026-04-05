@@ -1,4 +1,5 @@
 import { spawn, execSync, ChildProcess } from 'child_process';
+import { createConnection } from 'net';
 import { logger } from '../utils/logger.js';
 
 const MAX_TUNNELS = 5;
@@ -13,15 +14,39 @@ interface TunnelEntry {
 }
 
 const ORPHAN_SCAN_INTERVAL_MS = 60000;
+const PORT_CHECK_INTERVAL_MS = 15000;
+const PORT_CHECK_TIMEOUT_MS = 3000;
+
+function isPortAlive(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ port, host: 'localhost' });
+    socket.setTimeout(PORT_CHECK_TIMEOUT_MS);
+    socket.on('connect', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.on('timeout', () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.on('error', () => {
+      resolve(false);
+    });
+  });
+}
 
 export class TunnelManager {
   private tunnels = new Map<number, TunnelEntry>();
   private pending = new Map<number, Promise<string>>();
+  private watchedPorts = new Set<number>();
   private orphanTimer: ReturnType<typeof setInterval> | undefined;
+  private portCheckTimer: ReturnType<typeof setInterval> | undefined;
+  private checkingPorts = false;
 
   constructor() {
     this.cleanupOrphans();
     this.orphanTimer = setInterval(() => this.killUntracked(), ORPHAN_SCAN_INTERVAL_MS);
+    this.portCheckTimer = setInterval(() => this.checkPorts(), PORT_CHECK_INTERVAL_MS);
   }
 
   private cleanupOrphans(): void {
@@ -58,7 +83,33 @@ export class TunnelManager {
     }
   }
 
+  private async checkPorts(): Promise<void> {
+    if (this.checkingPorts) return;
+    this.checkingPorts = true;
+    try {
+      for (const port of this.watchedPorts) {
+        const alive = await isPortAlive(port);
+        const entry = this.tunnels.get(port);
+
+        if (!alive && entry) {
+          // Localhost server stopped — close the tunnel
+          logger.info(`Port ${port} is no longer listening, closing tunnel`);
+          entry.process.kill();
+          this.tunnels.delete(port);
+        } else if (alive && !entry && !this.pending.has(port)) {
+          // Localhost server came back — create a fresh tunnel
+          logger.info(`Port ${port} is listening again, creating new tunnel`);
+          this.startTunnel(port).catch(() => {});
+        }
+      }
+    } finally {
+      this.checkingPorts = false;
+    }
+  }
+
   startTunnel(port: number): Promise<string> {
+    this.watchedPorts.add(port);
+
     // Return existing tunnel URL
     const existing = this.tunnels.get(port);
     if (existing?.url) return Promise.resolve(existing.url);
@@ -83,6 +134,7 @@ export class TunnelManager {
   }
 
   stopTunnel(port: number): void {
+    this.watchedPorts.delete(port);
     const entry = this.tunnels.get(port);
     if (entry) {
       entry.process.kill();
@@ -92,9 +144,14 @@ export class TunnelManager {
   }
 
   stopAll(): void {
+    this.watchedPorts.clear();
     if (this.orphanTimer) {
       clearInterval(this.orphanTimer);
       this.orphanTimer = undefined;
+    }
+    if (this.portCheckTimer) {
+      clearInterval(this.portCheckTimer);
+      this.portCheckTimer = undefined;
     }
     for (const [port] of this.tunnels) {
       this.stopTunnel(port);
@@ -170,10 +227,8 @@ export class TunnelManager {
       });
 
       proc.on('exit', (code) => {
-        if (entry.url) {
-          logger.warn(`cloudflared exited (code ${code}) for port ${port}, tunnel will be re-created on next use`);
-          this.tunnels.delete(port);
-        }
+        logger.warn(`cloudflared exited (code ${code}) for port ${port}, tunnel will be re-created on next use`);
+        this.tunnels.delete(port);
       });
     });
   }
