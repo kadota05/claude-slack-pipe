@@ -3,7 +3,7 @@ import { logger } from '../utils/logger.js';
 import { getToolOneLiner } from './tool-formatter.js';
 import { convertMarkdownToMrkdwn } from './markdown-converter.js';
 import { GroupTracker } from './group-tracker.js';
-import { TunnelManager } from './tunnel-manager.js';
+import { TunnelManager, isPortAlive } from './tunnel-manager.js';
 import { notifyText } from './notification-text.js';
 import { extractLocalUrls, buildLocalhostAccessBlocks } from './localhost-rewriter.js';
 import type { LocalUrl } from './localhost-rewriter.js';
@@ -36,6 +36,11 @@ export class StreamProcessor {
   private firstContentReceived = false;
   // Accumulate localhost URLs across entire session (survives finalizeCurrentText)
   private discoveredLocalUrls = new Map<string, LocalUrl>();
+  // Ports discovered in AI text responses — persists across the session
+  private watchedPorts = new Set<number>();
+  // Track the message that currently has tunnel buttons (for removal on next response)
+  private tunnelButtonMessageTs: string | null = null;
+  private tunnelButtonMessageBlocks: Block[] | null = null;
 
   constructor(config: StreamProcessorConfig) {
     this.config = config;
@@ -95,12 +100,20 @@ export class StreamProcessor {
     return this.textBuffer;
   }
 
+  registerTunnelButtonMessage(messageTs: string, blocks: Block[]): void {
+    this.tunnelButtonMessageTs = messageTs;
+    this.tunnelButtonMessageBlocks = blocks;
+  }
+
   reset(): void {
     this.textBuffer = '';
     this.textMessageTs = null;
     this.lastMainUsage = null;
     this.firstContentReceived = false;
     this.discoveredLocalUrls.clear();
+    this.watchedPorts.clear();
+    this.tunnelButtonMessageTs = null;
+    this.tunnelButtonMessageBlocks = null;
   }
 
   dispose(): void {
@@ -168,10 +181,9 @@ export class StreamProcessor {
       // Scan full buffer, not just new chunk — URLs may be split across chunks
       const localUrls = extractLocalUrls(this.textBuffer);
       for (const localUrl of localUrls) {
-        // Accumulate across session (survives finalizeCurrentText buffer clears)
         this.discoveredLocalUrls.set(localUrl.url, localUrl);
-        // Fire-and-forget: start tunnel in parallel (deduplication handled by TunnelManager)
-        this.tunnelManager.startTunnel(localUrl.port);
+        // Register port for lifecycle tracking (persist across session)
+        this.watchedPorts.add(localUrl.port);
       }
     }
 
@@ -281,36 +293,70 @@ export class StreamProcessor {
 
       const blocks = this.buildTextBlocks(converted);
 
-      // Append localhost access buttons (tunnel URL buttons or failure warning)
-      // Uses session-wide accumulated URLs, not just current text buffer,
-      // so URLs from earlier text rounds (before tool use) are not lost
-      if (this.tunnelManager && this.discoveredLocalUrls.size > 0) {
-        // Also scan current text in case new URLs appeared in final text
+      // Append localhost access buttons based on watched ports (alive check)
+      if (this.tunnelManager && this.watchedPorts.size > 0) {
+        // Also register any new URLs from final text
         for (const localUrl of extractLocalUrls(converted)) {
           this.discoveredLocalUrls.set(localUrl.url, localUrl);
+          this.watchedPorts.add(localUrl.port);
         }
 
-        const allLocalUrls = [...this.discoveredLocalUrls.values()];
-        const urlMap = new Map<string, string>();
-        await Promise.all(
-          allLocalUrls.map(async ({ url, port }) => {
-            const tunnelUrl = await this.tunnelManager!.startTunnel(port);
-            if (tunnelUrl) {
-              try {
-                const parsed = new URL(url);
-                const path = parsed.pathname + parsed.search + parsed.hash;
-                urlMap.set(url, tunnelUrl + (path === '/' ? '' : path));
-              } catch {
-                // Fallback: map to tunnel root if URL parsing fails
-                urlMap.set(url, tunnelUrl);
-              }
-            }
-          })
+        // Check which watched ports are alive
+        const alivePortUrls: LocalUrl[] = [];
+        const portAliveResults = await Promise.all(
+          [...this.watchedPorts].map(async (port) => ({
+            port,
+            alive: await isPortAlive(port),
+          }))
         );
-        const accessBlocks = buildLocalhostAccessBlocks(allLocalUrls, urlMap);
-        const maxAccessBlocks = 50 - blocks.length;
-        if (accessBlocks.length > 0 && maxAccessBlocks > 0) {
-          blocks.push(...accessBlocks.slice(0, maxAccessBlocks));
+
+        for (const { port, alive } of portAliveResults) {
+          if (alive) {
+            const urlsForPort = [...this.discoveredLocalUrls.values()].filter(u => u.port === port);
+            if (urlsForPort.length > 0) {
+              alivePortUrls.push(...urlsForPort);
+            } else {
+              alivePortUrls.push({ url: `http://localhost:${port}`, host: 'localhost', port });
+            }
+          }
+        }
+
+        if (alivePortUrls.length > 0) {
+          const urlMap = new Map<string, string>();
+          await Promise.all(
+            alivePortUrls.map(async ({ url, port }) => {
+              const tunnelUrl = await this.tunnelManager!.startTunnel(port);
+              if (tunnelUrl) {
+                try {
+                  const parsed = new URL(url);
+                  const path = parsed.pathname + parsed.search + parsed.hash;
+                  urlMap.set(url, tunnelUrl + (path === '/' ? '' : path));
+                } catch {
+                  urlMap.set(url, tunnelUrl);
+                }
+              }
+            })
+          );
+          const accessBlocks = buildLocalhostAccessBlocks(alivePortUrls, urlMap);
+          const maxAccessBlocks = 50 - blocks.length;
+          if (accessBlocks.length > 0 && maxAccessBlocks > 0) {
+            blocks.push(...accessBlocks.slice(0, maxAccessBlocks));
+          }
+        }
+
+        // Generate action to remove tunnel buttons from previous message
+        if (this.tunnelButtonMessageTs && this.tunnelButtonMessageBlocks) {
+          const cleanBlocks = this.stripTunnelBlocks(this.tunnelButtonMessageBlocks);
+          result.removeTunnelButtonAction = {
+            type: 'update',
+            priority: 3,
+            channel: this.config.channel,
+            threadTs: this.config.threadTs,
+            messageTs: this.tunnelButtonMessageTs,
+            blocks: cleanBlocks,
+            text: '',
+            metadata: { messageType: 'text' },
+          };
         }
       }
 
@@ -364,5 +410,38 @@ export class StreamProcessor {
       });
     }
     return blocks;
+  }
+
+  private stripTunnelBlocks(blocks: Block[]): Block[] {
+    const result: Block[] = [];
+    for (let i = 0; i < blocks.length; i++) {
+      const block = blocks[i];
+      // Skip actions blocks with tunnel_access buttons
+      if (block.type === 'actions') {
+        const elements = block.elements as any[] | undefined;
+        if (elements?.some((e: any) => e.action_id?.startsWith('tunnel_access:'))) {
+          continue;
+        }
+      }
+      // Skip context blocks with tunnel warning message
+      if (block.type === 'context') {
+        const elements = block.elements as any[] | undefined;
+        if (elements?.some((e: any) => e.text?.includes('モバイルアクセスリンクを準備できませんでした'))) {
+          continue;
+        }
+      }
+      // Skip divider immediately before a tunnel actions block
+      if (block.type === 'divider' && i + 1 < blocks.length) {
+        const next = blocks[i + 1];
+        if (next.type === 'actions') {
+          const elements = next.elements as any[] | undefined;
+          if (elements?.some((e: any) => e.action_id?.startsWith('tunnel_access:'))) {
+            continue;
+          }
+        }
+      }
+      result.push(block);
+    }
+    return result;
   }
 }
