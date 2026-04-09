@@ -14,10 +14,9 @@ interface TunnelEntry {
 }
 
 const ORPHAN_SCAN_INTERVAL_MS = 60000;
-const PORT_CHECK_INTERVAL_MS = 15000;
 const PORT_CHECK_TIMEOUT_MS = 3000;
 
-function isPortAlive(port: number): Promise<boolean> {
+export function isPortAlive(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = createConnection({ port, host: 'localhost' });
     socket.setTimeout(PORT_CHECK_TIMEOUT_MS);
@@ -38,15 +37,11 @@ function isPortAlive(port: number): Promise<boolean> {
 export class TunnelManager {
   private tunnels = new Map<number, TunnelEntry>();
   private pending = new Map<number, Promise<string>>();
-  private watchedPorts = new Set<number>();
   private orphanTimer: ReturnType<typeof setInterval> | undefined;
-  private portCheckTimer: ReturnType<typeof setInterval> | undefined;
-  private checkingPorts = false;
 
   constructor() {
     this.cleanupOrphans();
     this.orphanTimer = setInterval(() => this.killUntracked(), ORPHAN_SCAN_INTERVAL_MS);
-    this.portCheckTimer = setInterval(() => this.checkPorts(), PORT_CHECK_INTERVAL_MS);
   }
 
   private cleanupOrphans(): void {
@@ -83,32 +78,13 @@ export class TunnelManager {
     }
   }
 
-  private async checkPorts(): Promise<void> {
-    if (this.checkingPorts) return;
-    this.checkingPorts = true;
-    try {
-      for (const port of this.watchedPorts) {
-        const alive = await isPortAlive(port);
-        const entry = this.tunnels.get(port);
-
-        if (!alive && entry) {
-          // Localhost server stopped — close the tunnel
-          logger.info(`Port ${port} is no longer listening, closing tunnel`);
-          entry.process.kill();
-          this.tunnels.delete(port);
-        } else if (alive && !entry && !this.pending.has(port)) {
-          // Localhost server came back — create a fresh tunnel
-          logger.info(`Port ${port} is listening again, creating new tunnel`);
-          this.startTunnel(port).catch(() => {});
-        }
-      }
-    } finally {
-      this.checkingPorts = false;
+  async startTunnel(port: number): Promise<string> {
+    // Check if port is actually listening before creating tunnel
+    const alive = await isPortAlive(port);
+    if (!alive) {
+      logger.info(`Port ${port} is not listening, skipping tunnel creation`);
+      return '';
     }
-  }
-
-  startTunnel(port: number): Promise<string> {
-    this.watchedPorts.add(port);
 
     // Return existing tunnel URL
     const existing = this.tunnels.get(port);
@@ -134,7 +110,6 @@ export class TunnelManager {
   }
 
   stopTunnel(port: number): void {
-    this.watchedPorts.delete(port);
     const entry = this.tunnels.get(port);
     if (entry) {
       entry.process.kill();
@@ -144,14 +119,9 @@ export class TunnelManager {
   }
 
   stopAll(): void {
-    this.watchedPorts.clear();
     if (this.orphanTimer) {
       clearInterval(this.orphanTimer);
       this.orphanTimer = undefined;
-    }
-    if (this.portCheckTimer) {
-      clearInterval(this.portCheckTimer);
-      this.portCheckTimer = undefined;
     }
     for (const [port] of this.tunnels) {
       this.stopTunnel(port);
