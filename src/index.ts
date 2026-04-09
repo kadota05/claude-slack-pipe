@@ -745,7 +745,7 @@ async function main(): Promise<void> {
               isApproximate,
             });
 
-            // Build tunnel buttons with port retry (max 10s) — runs in parallel with footer prep
+            // Build tunnel buttons with port retry (max 10s wait for server startup)
             let tunnelBlocks: any[] = [];
             let removePrevAction: any;
             if (streamProcessor.hasWatchedPorts()) {

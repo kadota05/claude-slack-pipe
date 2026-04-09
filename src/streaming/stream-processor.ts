@@ -3,7 +3,7 @@ import { logger } from '../utils/logger.js';
 import { getToolOneLiner } from './tool-formatter.js';
 import { convertMarkdownToMrkdwn } from './markdown-converter.js';
 import { GroupTracker } from './group-tracker.js';
-import { TunnelManager, isPortAlive, waitForPort } from './tunnel-manager.js';
+import { TunnelManager, waitForPort } from './tunnel-manager.js';
 import { notifyText } from './notification-text.js';
 import { extractLocalUrls, buildLocalhostAccessBlocks } from './localhost-rewriter.js';
 import type { LocalUrl } from './localhost-rewriter.js';
