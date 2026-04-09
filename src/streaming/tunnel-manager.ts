@@ -1,10 +1,16 @@
 import { spawn, execSync, ChildProcess } from 'child_process';
 import { createConnection } from 'net';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { logger } from '../utils/logger.js';
 
 const MAX_TUNNELS = 5;
 const TUNNEL_TIMEOUT_MS = 15000;
 const TUNNEL_URL_REGEX = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
+
+// PID file to track our own cloudflared processes across restarts
+const PID_FILE = path.join(os.tmpdir(), 'claude-slack-pipe-tunnel-pids.json');
 
 interface TunnelEntry {
   process: ChildProcess;
@@ -13,7 +19,6 @@ interface TunnelEntry {
   createdAt: number;
 }
 
-const ORPHAN_SCAN_INTERVAL_MS = 60000;
 const PORT_CHECK_TIMEOUT_MS = 3000;
 const PORT_RETRY_INTERVAL_MS = 2000;
 const PORT_RETRY_MAX_ATTEMPTS = 5;
@@ -50,44 +55,56 @@ export async function waitForPort(port: number): Promise<boolean> {
 export class TunnelManager {
   private tunnels = new Map<number, TunnelEntry>();
   private pending = new Map<number, Promise<string>>();
-  private orphanTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor() {
-    this.cleanupOrphans();
-    this.orphanTimer = setInterval(() => this.killUntracked(), ORPHAN_SCAN_INTERVAL_MS);
+    this.cleanupOwnOrphans();
   }
 
-  private cleanupOrphans(): void {
+  /** Kill only cloudflared processes that WE started in a previous session (tracked via PID file) */
+  private cleanupOwnOrphans(): void {
     try {
-      execSync('pkill -f "cloudflared tunnel --url localhost"', { stdio: 'ignore' });
-      logger.info('Cleaned up orphaned cloudflared processes from previous session');
-    } catch {
-      // No orphaned processes — normal case
-    }
-  }
-
-  private killUntracked(): void {
-    try {
-      const output = execSync('pgrep -f "cloudflared tunnel --url localhost"', {
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      const ownedPids = new Set(
-        [...this.tunnels.values()].map((e) => e.process.pid).filter(Boolean),
-      );
-      const pids = output.trim().split('\n').map(Number).filter(Boolean);
+      const data = fs.readFileSync(PID_FILE, 'utf-8');
+      const pids: number[] = JSON.parse(data);
+      let cleaned = 0;
       for (const pid of pids) {
-        if (!ownedPids.has(pid)) {
-          try {
-            process.kill(pid, 'SIGKILL');
-            logger.warn(`Killed orphaned cloudflared process: PID ${pid}`);
-          } catch {
-            // Already dead
-          }
+        // Verify this PID is actually a cloudflared process before killing (guards against PID reuse)
+        try {
+          const output = execSync(`ps -p ${pid} -o command=`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+          if (!output.includes('cloudflared')) continue;
+        } catch {
+          // Process doesn't exist — skip
+          continue;
+        }
+        try {
+          // Graceful shutdown first, then force kill after 2s
+          process.kill(pid, 'SIGTERM');
+          setTimeout(() => {
+            try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+          }, 2000);
+          cleaned++;
+        } catch {
+          // Already dead — normal
         }
       }
+      if (cleaned > 0) {
+        logger.info(`Cleaned up ${cleaned} orphaned cloudflared process(es) from previous session`);
+      }
     } catch {
-      // No cloudflared processes found — normal
+      // PID file doesn't exist or is invalid — no orphans to clean
+    }
+    // Reset PID file for this session
+    this.savePidFile();
+  }
+
+  /** Persist our owned PIDs so next startup can clean them up */
+  private savePidFile(): void {
+    const pids = [...this.tunnels.values()]
+      .map((e) => e.process.pid)
+      .filter((pid): pid is number => pid !== undefined);
+    try {
+      fs.writeFileSync(PID_FILE, JSON.stringify(pids), 'utf-8');
+    } catch {
+      // Non-critical — orphan cleanup just won't work next time
     }
   }
 
@@ -122,23 +139,29 @@ export class TunnelManager {
     return this.tunnels.get(port)?.url;
   }
 
+  /** Return ports that have active tunnels with resolved URLs */
+  getActivePorts(): number[] {
+    return [...this.tunnels.entries()]
+      .filter(([, entry]) => entry.url)
+      .map(([port]) => port);
+  }
+
   stopTunnel(port: number): void {
     const entry = this.tunnels.get(port);
     if (entry) {
       entry.process.kill();
       this.tunnels.delete(port);
+      this.savePidFile();
       logger.info(`Tunnel stopped for port ${port}`);
     }
   }
 
   stopAll(): void {
-    if (this.orphanTimer) {
-      clearInterval(this.orphanTimer);
-      this.orphanTimer = undefined;
-    }
     for (const [port] of this.tunnels) {
       this.stopTunnel(port);
     }
+    // Clean up PID file — no orphans to track
+    try { fs.unlinkSync(PID_FILE); } catch { /* ignore */ }
   }
 
   private async spawnTunnelWithRetry(port: number): Promise<string> {
@@ -156,6 +179,7 @@ export class TunnelManager {
     if (entry) {
       entry.process.kill();
       this.tunnels.delete(port);
+      this.savePidFile();
     }
   }
 
@@ -172,6 +196,7 @@ export class TunnelManager {
         createdAt: Date.now(),
       };
       this.tunnels.set(port, entry);
+      this.savePidFile();
 
       const timeout = setTimeout(() => {
         if (!entry.url) {
@@ -179,6 +204,7 @@ export class TunnelManager {
           // Kill the timed-out process to avoid zombie
           proc.kill();
           this.tunnels.delete(port);
+          this.savePidFile();
           resolve('');
         }
       }, TUNNEL_TIMEOUT_MS);
@@ -205,6 +231,7 @@ export class TunnelManager {
       proc.on('error', (err) => {
         logger.error(`cloudflared error for port ${port}: ${err.message}`);
         this.tunnels.delete(port);
+        this.savePidFile();
         clearTimeout(timeout);
         resolve('');
       });
@@ -212,6 +239,7 @@ export class TunnelManager {
       proc.on('exit', (code) => {
         logger.warn(`cloudflared exited (code ${code}) for port ${port}, tunnel will be re-created on next use`);
         this.tunnels.delete(port);
+        this.savePidFile();
       });
     });
   }

@@ -111,19 +111,30 @@ export class StreamProcessor {
   }
 
   hasWatchedPorts(): boolean {
-    return this.watchedPorts.size > 0 && !!this.tunnelManager;
+    if (!this.tunnelManager) return false;
+    // Check both session-discovered ports AND already-active tunnels from previous sessions
+    return this.watchedPorts.size > 0 || this.tunnelManager.getActivePorts().length > 0;
   }
 
   /** Build tunnel access blocks with port retry. Called from index.ts at footer time. */
   async buildTunnelButtons(): Promise<{ accessBlocks: Block[]; removePrevAction?: SlackAction }> {
-    if (!this.tunnelManager || this.watchedPorts.size === 0) {
+    if (!this.tunnelManager) {
+      return { accessBlocks: [] };
+    }
+
+    // Merge session-discovered ports with already-active tunnel ports
+    const allPorts = new Set([
+      ...this.watchedPorts,
+      ...this.tunnelManager.getActivePorts(),
+    ]);
+    if (allPorts.size === 0) {
       return { accessBlocks: [] };
     }
 
     // Wait for ports with retry (handles servers still starting up)
     const alivePortUrls: LocalUrl[] = [];
     const portResults = await Promise.all(
-      [...this.watchedPorts].map(async (port) => ({
+      [...allPorts].map(async (port) => ({
         port,
         alive: await waitForPort(port),
       }))
@@ -356,6 +367,17 @@ export class StreamProcessor {
     // Normal tool result — GroupTracker calculates durationMs internally from tool.startTime
     const actions = this.groupTracker.handleToolResult(toolUseId, resultText, isError);
     result.bundleActions.push(...actions);
+
+    // Scan tool output for localhost URLs (e.g. Bash starting a server)
+    if (this.tunnelManager && resultText) {
+      const localUrls = extractLocalUrls(resultText);
+      for (const localUrl of localUrls) {
+        this.discoveredLocalUrls.set(localUrl.url, localUrl);
+        this.watchedPorts.add(localUrl.port);
+        // Fire-and-forget: pre-warm tunnel
+        this.tunnelManager.startTunnel(localUrl.port);
+      }
+    }
   }
 
   private async handleResult(event: any, result: ProcessedActions): Promise<void> {
