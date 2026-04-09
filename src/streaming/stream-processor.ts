@@ -357,6 +357,9 @@ export class StreamProcessor {
             text: '',
             metadata: { messageType: 'text' },
           };
+          // Clear to avoid redundant chat.update on subsequent finalizes
+          this.tunnelButtonMessageTs = null;
+          this.tunnelButtonMessageBlocks = null;
         }
       }
 
