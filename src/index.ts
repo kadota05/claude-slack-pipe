@@ -690,7 +690,7 @@ async function main(): Promise<void> {
       serialQueue.enqueue(async () => {
         try {
           // 1. Process event — returns actions (async for tunnel URL rewriting)
-          const { bundleActions, textAction, resultEvent, lastMainUsage } = await streamProcessor.processEvent(event);
+          const { bundleActions, textAction, removeTunnelButtonAction, resultEvent, lastMainUsage } = await streamProcessor.processEvent(event);
 
           // 2. Execute bundle actions sequentially
           const bundleTsMap = new Map<string, string>();
@@ -716,6 +716,23 @@ async function main(): Promise<void> {
             if (result.ok && result.ts && textAction.type === 'postMessage') {
               streamProcessor.registerTextMessageTs(result.ts);
             }
+            // Track message with tunnel buttons for future removal
+            if (result.ok && textAction.blocks) {
+              const hasTunnelButtons = (textAction.blocks as any[]).some((b: any) =>
+                b.type === 'actions' && b.elements?.some((e: any) => e.action_id?.startsWith('tunnel_access:'))
+              );
+              if (hasTunnelButtons) {
+                const ts = textAction.type === 'postMessage' ? result.ts : textAction.messageTs;
+                if (ts) {
+                  streamProcessor.registerTunnelButtonMessage(ts, textAction.blocks as any[]);
+                }
+              }
+            }
+          }
+
+          // 4. Remove tunnel buttons from previous message
+          if (removeTunnelButtonAction) {
+            await executor.execute(removeTunnelButtonAction);
           }
 
           // 6. Handle result event
