@@ -693,7 +693,7 @@ async function main(): Promise<void> {
       serialQueue.enqueue(async () => {
         try {
           // 1. Process event — returns actions (async for tunnel URL rewriting)
-          const { bundleActions, textAction, removeTunnelButtonAction, resultEvent, lastMainUsage } = await streamProcessor.processEvent(event);
+          const { bundleActions, textAction, resultEvent, lastMainUsage } = await streamProcessor.processEvent(event);
 
           // 2. Execute bundle actions sequentially
           const bundleTsMap = new Map<string, string>();
@@ -719,23 +719,6 @@ async function main(): Promise<void> {
             if (result.ok && result.ts && textAction.type === 'postMessage') {
               streamProcessor.registerTextMessageTs(result.ts);
             }
-            // Track message with tunnel buttons for future removal
-            if (result.ok && textAction.blocks) {
-              const hasTunnelButtons = (textAction.blocks as any[]).some((b: any) =>
-                b.type === 'actions' && b.elements?.some((e: any) => e.action_id?.startsWith('tunnel_access:'))
-              );
-              if (hasTunnelButtons) {
-                const ts = textAction.type === 'postMessage' ? result.ts : textAction.messageTs;
-                if (ts) {
-                  streamProcessor.registerTunnelButtonMessage(ts, textAction.blocks as any[]);
-                }
-              }
-            }
-          }
-
-          // 4. Remove tunnel buttons from previous message
-          if (removeTunnelButtonAction) {
-            await executor.execute(removeTunnelButtonAction);
           }
 
           // 6. Handle result event
@@ -762,15 +745,35 @@ async function main(): Promise<void> {
               isApproximate,
             });
 
-            await client.chat.postMessage({
+            // Build tunnel buttons with port retry (max 10s) — runs in parallel with footer prep
+            let tunnelBlocks: any[] = [];
+            let removePrevAction: any;
+            if (streamProcessor.hasWatchedPorts()) {
+              const tunnelResult = await streamProcessor.buildTunnelButtons();
+              tunnelBlocks = tunnelResult.accessBlocks;
+              removePrevAction = tunnelResult.removePrevAction;
+            }
+
+            // Remove tunnel buttons from previous message
+            if (removePrevAction) {
+              await executor.execute(removePrevAction);
+            }
+
+            const allFooterBlocks = [...tunnelBlocks, ...footerBlocks];
+            const footerResult = await client.chat.postMessage({
               channel: channelId,
               thread_ts: threadTs,
-              blocks: footerBlocks,
+              blocks: allFooterBlocks,
               text: notifyText.footer(
                 sessionModel || 'unknown',
                 resultEvent.duration_ms || 0,
               ),
             });
+
+            // Track footer message for tunnel button removal on next response
+            if (tunnelBlocks.length > 0 && footerResult.ok && footerResult.ts) {
+              streamProcessor.registerTunnelButtonMessage(footerResult.ts, allFooterBlocks);
+            }
 
             // Use the ts captured at emit time — activeMessageTs may already
             // point to the next queued message due to synchronous dequeue.

@@ -3,7 +3,7 @@ import { logger } from '../utils/logger.js';
 import { getToolOneLiner } from './tool-formatter.js';
 import { convertMarkdownToMrkdwn } from './markdown-converter.js';
 import { GroupTracker } from './group-tracker.js';
-import { TunnelManager, isPortAlive } from './tunnel-manager.js';
+import { TunnelManager, isPortAlive, waitForPort } from './tunnel-manager.js';
 import { notifyText } from './notification-text.js';
 import { extractLocalUrls, buildLocalhostAccessBlocks } from './localhost-rewriter.js';
 import type { LocalUrl } from './localhost-rewriter.js';
@@ -108,6 +108,77 @@ export class StreamProcessor {
 
   registerTunnelButtonMessage(messageTs: string, blocks: Block[]): void {
     this.tunnelButtonState?.set(this.config.threadTs, { messageTs, blocks });
+  }
+
+  hasWatchedPorts(): boolean {
+    return this.watchedPorts.size > 0 && !!this.tunnelManager;
+  }
+
+  /** Build tunnel access blocks with port retry. Called from index.ts at footer time. */
+  async buildTunnelButtons(): Promise<{ accessBlocks: Block[]; removePrevAction?: SlackAction }> {
+    if (!this.tunnelManager || this.watchedPorts.size === 0) {
+      return { accessBlocks: [] };
+    }
+
+    // Wait for ports with retry (handles servers still starting up)
+    const alivePortUrls: LocalUrl[] = [];
+    const portResults = await Promise.all(
+      [...this.watchedPorts].map(async (port) => ({
+        port,
+        alive: await waitForPort(port),
+      }))
+    );
+
+    for (const { port, alive } of portResults) {
+      if (alive) {
+        const urlsForPort = [...this.discoveredLocalUrls.values()].filter(u => u.port === port);
+        if (urlsForPort.length > 0) {
+          alivePortUrls.push(...urlsForPort);
+        } else {
+          alivePortUrls.push({ url: `http://localhost:${port}`, host: 'localhost', port });
+        }
+      }
+    }
+
+    const accessBlocks: Block[] = [];
+    if (alivePortUrls.length > 0) {
+      const urlMap = new Map<string, string>();
+      await Promise.all(
+        alivePortUrls.map(async ({ url, port }) => {
+          const tunnelUrl = await this.tunnelManager!.startTunnel(port);
+          if (tunnelUrl) {
+            try {
+              const parsed = new URL(url);
+              const path = parsed.pathname + parsed.search + parsed.hash;
+              urlMap.set(url, tunnelUrl + (path === '/' ? '' : path));
+            } catch {
+              urlMap.set(url, tunnelUrl);
+            }
+          }
+        })
+      );
+      accessBlocks.push(...buildLocalhostAccessBlocks(alivePortUrls, urlMap));
+    }
+
+    // Generate action to remove tunnel buttons from previous message
+    let removePrevAction: SlackAction | undefined;
+    const prevButton = this.tunnelButtonState?.get(this.config.threadTs);
+    if (prevButton) {
+      const cleanBlocks = this.stripTunnelBlocks(prevButton.blocks);
+      removePrevAction = {
+        type: 'update',
+        priority: 3,
+        channel: this.config.channel,
+        threadTs: this.config.threadTs,
+        messageTs: prevButton.messageTs,
+        blocks: cleanBlocks,
+        text: '',
+        metadata: { messageType: 'text' },
+      };
+      this.tunnelButtonState?.delete(this.config.threadTs);
+    }
+
+    return { accessBlocks, removePrevAction };
   }
 
   reset(): void {
@@ -298,73 +369,11 @@ export class StreamProcessor {
 
       const blocks = this.buildTextBlocks(converted);
 
-      // Append localhost access buttons based on watched ports (alive check)
-      if (this.tunnelManager && this.watchedPorts.size > 0) {
-        // Also register any new URLs from final text
+      // Register any new URLs from final text into watchedPorts
+      if (this.tunnelManager) {
         for (const localUrl of extractLocalUrls(converted)) {
           this.discoveredLocalUrls.set(localUrl.url, localUrl);
           this.watchedPorts.add(localUrl.port);
-        }
-
-        // Check which watched ports are alive
-        const alivePortUrls: LocalUrl[] = [];
-        const portAliveResults = await Promise.all(
-          [...this.watchedPorts].map(async (port) => ({
-            port,
-            alive: await isPortAlive(port),
-          }))
-        );
-
-        for (const { port, alive } of portAliveResults) {
-          if (alive) {
-            const urlsForPort = [...this.discoveredLocalUrls.values()].filter(u => u.port === port);
-            if (urlsForPort.length > 0) {
-              alivePortUrls.push(...urlsForPort);
-            } else {
-              alivePortUrls.push({ url: `http://localhost:${port}`, host: 'localhost', port });
-            }
-          }
-        }
-
-        if (alivePortUrls.length > 0) {
-          const urlMap = new Map<string, string>();
-          await Promise.all(
-            alivePortUrls.map(async ({ url, port }) => {
-              const tunnelUrl = await this.tunnelManager!.startTunnel(port);
-              if (tunnelUrl) {
-                try {
-                  const parsed = new URL(url);
-                  const path = parsed.pathname + parsed.search + parsed.hash;
-                  urlMap.set(url, tunnelUrl + (path === '/' ? '' : path));
-                } catch {
-                  urlMap.set(url, tunnelUrl);
-                }
-              }
-            })
-          );
-          const accessBlocks = buildLocalhostAccessBlocks(alivePortUrls, urlMap);
-          const maxAccessBlocks = 50 - blocks.length;
-          if (accessBlocks.length > 0 && maxAccessBlocks > 0) {
-            blocks.push(...accessBlocks.slice(0, maxAccessBlocks));
-          }
-        }
-
-        // Generate action to remove tunnel buttons from previous message
-        const prevButton = this.tunnelButtonState?.get(this.config.threadTs);
-        if (prevButton) {
-          const cleanBlocks = this.stripTunnelBlocks(prevButton.blocks);
-          result.removeTunnelButtonAction = {
-            type: 'update',
-            priority: 3,
-            channel: this.config.channel,
-            threadTs: this.config.threadTs,
-            messageTs: prevButton.messageTs,
-            blocks: cleanBlocks,
-            text: '',
-            metadata: { messageType: 'text' },
-          };
-          // Clear to avoid redundant chat.update on subsequent finalizes
-          this.tunnelButtonState?.delete(this.config.threadTs);
         }
       }
 

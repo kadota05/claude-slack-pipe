@@ -175,7 +175,6 @@ export type BundleAction =
 export interface ProcessedActions {
   bundleActions: BundleAction[];
   textAction?: SlackAction;
-  removeTunnelButtonAction?: SlackAction;
   resultEvent?: any;
   lastMainUsage?: TokenUsage | null;
 }

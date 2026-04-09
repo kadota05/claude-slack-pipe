@@ -15,6 +15,8 @@ interface TunnelEntry {
 
 const ORPHAN_SCAN_INTERVAL_MS = 60000;
 const PORT_CHECK_TIMEOUT_MS = 3000;
+const PORT_RETRY_INTERVAL_MS = 2000;
+const PORT_RETRY_MAX_ATTEMPTS = 5;
 
 export function isPortAlive(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -32,6 +34,17 @@ export function isPortAlive(port: number): Promise<boolean> {
       resolve(false);
     });
   });
+}
+
+/** Retry isPortAlive with intervals for servers that are still starting up */
+export async function waitForPort(port: number): Promise<boolean> {
+  for (let i = 0; i < PORT_RETRY_MAX_ATTEMPTS; i++) {
+    if (await isPortAlive(port)) return true;
+    if (i < PORT_RETRY_MAX_ATTEMPTS - 1) {
+      await new Promise((r) => setTimeout(r, PORT_RETRY_INTERVAL_MS));
+    }
+  }
+  return false;
 }
 
 export class TunnelManager {
