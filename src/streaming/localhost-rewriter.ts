@@ -75,10 +75,13 @@ export function buildLocalhostAccessBlocks(
     const tunnelUrl = urlMap.get(url);
     if (tunnelUrl) {
       const displayUrl = url.replace(/^https?:\/\//, '');
+      // Cache buster prevents Slack WebView from serving stale failure responses
+      const sep = tunnelUrl.includes('?') ? '&' : '?';
+      const cacheBustedUrl = `${tunnelUrl}${sep}_cb=${Date.now()}`;
       buttons.push({
         type: 'button',
         text: { type: 'plain_text', text: `🌐 ${displayUrl}` },
-        url: tunnelUrl,
+        url: cacheBustedUrl,
         action_id: `tunnel_access:${buttons.length}`,
       });
     } else {
