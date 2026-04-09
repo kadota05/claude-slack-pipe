@@ -184,6 +184,8 @@ export class StreamProcessor {
         this.discoveredLocalUrls.set(localUrl.url, localUrl);
         // Register port for lifecycle tracking (persist across session)
         this.watchedPorts.add(localUrl.port);
+        // Fire-and-forget: pre-warm tunnel in parallel (isPortAlive check inside startTunnel)
+        this.tunnelManager.startTunnel(localUrl.port);
       }
     }
 
