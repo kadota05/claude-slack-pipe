@@ -17,12 +17,18 @@ import type {
   BundleAction,
 } from './types.js';
 
+export interface TunnelButtonState {
+  messageTs: string;
+  blocks: Block[];
+}
+
 interface StreamProcessorConfig {
   channel: string;
   threadTs: string;
   sessionId: string;
   cwd?: string;
   tunnelManager?: TunnelManager;
+  tunnelButtonState?: Map<string, TunnelButtonState>;
   onFirstContent?: () => void;
 }
 
@@ -38,14 +44,14 @@ export class StreamProcessor {
   private discoveredLocalUrls = new Map<string, LocalUrl>();
   // Ports discovered in AI text responses — persists across the session
   private watchedPorts = new Set<number>();
-  // Track the message that currently has tunnel buttons (for removal on next response)
-  private tunnelButtonMessageTs: string | null = null;
-  private tunnelButtonMessageBlocks: Block[] | null = null;
+  // Shared across sessions per thread — survives StreamProcessor recreation
+  private readonly tunnelButtonState?: Map<string, TunnelButtonState>;
 
   constructor(config: StreamProcessorConfig) {
     this.config = config;
     this.groupTracker = new GroupTracker();
     this.tunnelManager = config.tunnelManager;
+    this.tunnelButtonState = config.tunnelButtonState;
   }
 
   async processEvent(event: any): Promise<ProcessedActions> {
@@ -101,8 +107,7 @@ export class StreamProcessor {
   }
 
   registerTunnelButtonMessage(messageTs: string, blocks: Block[]): void {
-    this.tunnelButtonMessageTs = messageTs;
-    this.tunnelButtonMessageBlocks = blocks;
+    this.tunnelButtonState?.set(this.config.threadTs, { messageTs, blocks });
   }
 
   reset(): void {
@@ -112,8 +117,6 @@ export class StreamProcessor {
     this.firstContentReceived = false;
     this.discoveredLocalUrls.clear();
     this.watchedPorts.clear();
-    this.tunnelButtonMessageTs = null;
-    this.tunnelButtonMessageBlocks = null;
   }
 
   dispose(): void {
@@ -347,21 +350,21 @@ export class StreamProcessor {
         }
 
         // Generate action to remove tunnel buttons from previous message
-        if (this.tunnelButtonMessageTs && this.tunnelButtonMessageBlocks) {
-          const cleanBlocks = this.stripTunnelBlocks(this.tunnelButtonMessageBlocks);
+        const prevButton = this.tunnelButtonState?.get(this.config.threadTs);
+        if (prevButton) {
+          const cleanBlocks = this.stripTunnelBlocks(prevButton.blocks);
           result.removeTunnelButtonAction = {
             type: 'update',
             priority: 3,
             channel: this.config.channel,
             threadTs: this.config.threadTs,
-            messageTs: this.tunnelButtonMessageTs,
+            messageTs: prevButton.messageTs,
             blocks: cleanBlocks,
             text: '',
             metadata: { messageType: 'text' },
           };
           // Clear to avoid redundant chat.update on subsequent finalizes
-          this.tunnelButtonMessageTs = null;
-          this.tunnelButtonMessageBlocks = null;
+          this.tunnelButtonState?.delete(this.config.threadTs);
         }
       }
 

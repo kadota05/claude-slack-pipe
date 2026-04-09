@@ -185,6 +185,8 @@ async function main(): Promise<void> {
   const recentSessionScanner = new RecentSessionScanner(config.claudeProjectsDir);
 
   const tunnelManager = new TunnelManager();
+  // Shared per-thread tunnel button state — survives StreamProcessor recreation across sessions
+  const tunnelButtonState = new Map<string, { messageTs: string; blocks: any[] }>();
 
   // Initialize process coordination
   const coordinator = new SessionCoordinator({
@@ -648,6 +650,7 @@ async function main(): Promise<void> {
       sessionId: session.sessionId,
       cwd: projectPath,
       tunnelManager,
+      tunnelButtonState,
       onFirstContent: () => {
         const msgTs = activeMessageTs.get(session.sessionId);
         if (msgTs) {
